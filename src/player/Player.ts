@@ -1,54 +1,40 @@
 import * as pc from 'playcanvas';
 import type { Input } from '../core/Input';
+import type { Assets } from '../core/Assets';
 import { Movement, TUNING } from './Movement';
+import { PlayerAnimation } from './PlayerAnimation';
 import type { CollisionWorld } from '../world/Colliders';
+import { emissive } from '../world/Island';
 
-/** Visual + controller glue. The capsule is a placeholder until the Quaternius rig lands (Phase 3). */
+/** Quaternius character faces +Z in glTF; the game's forward is -Z. */
+const MODEL_YAW = 180;
+
 export class Player {
   readonly entity: pc.Entity;
   readonly movement: Movement;
+  readonly anim: PlayerAnimation;
   private visual: pc.Entity;
-  private trail: pc.Entity;
-  private dashFlash = 0;
+  private model: pc.Entity;
+  private rope: pc.Entity;
+  private lean = 0;
 
-  constructor(app: pc.AppBase, world: CollisionWorld) {
+  constructor(app: pc.AppBase, assets: Assets, world: CollisionWorld) {
     this.movement = new Movement(world);
     this.entity = new pc.Entity('player');
-
-    const body = new pc.StandardMaterial();
-    body.diffuse = new pc.Color(0.95, 0.55, 0.2);
-    body.update();
-    const nose = new pc.StandardMaterial();
-    nose.diffuse = new pc.Color(0.1, 0.1, 0.12);
-    nose.update();
-
     this.visual = new pc.Entity('player-visual');
-    const capsule = new pc.Entity('capsule');
-    capsule.addComponent('render', { type: 'capsule', material: body });
-    capsule.setLocalScale(TUNING.radius * 2, TUNING.height, TUNING.radius * 2);
-    capsule.setLocalPosition(0, TUNING.height * 0.5, 0);
-    this.visual.addChild(capsule);
-
-    const face = new pc.Entity('face');
-    face.addComponent('render', { type: 'box', material: nose });
-    face.setLocalScale(0.25, 0.12, 0.2);
-    face.setLocalPosition(0, TUNING.height * 0.78, -TUNING.radius);
-    this.visual.addChild(face);
-
-    this.trail = new pc.Entity('dash-trail');
-    const trailMat = new pc.StandardMaterial();
-    trailMat.emissive = new pc.Color(0.35, 0.82, 1);
-    trailMat.diffuse = new pc.Color(0, 0, 0);
-    trailMat.opacity = 0.6;
-    trailMat.blendType = pc.BLEND_ADDITIVE;
-    trailMat.update();
-    this.trail.addComponent('render', { type: 'capsule', material: trailMat });
-    this.trail.setLocalScale(TUNING.radius * 2.6, TUNING.height * 1.1, TUNING.radius * 2.6);
-    this.trail.setLocalPosition(0, TUNING.height * 0.5, 0);
-    this.trail.enabled = false;
-    this.visual.addChild(this.trail);
-
     this.entity.addChild(this.visual);
+
+    this.model = assets.spawn('player');
+    this.model.setLocalEulerAngles(0, MODEL_YAW, 0);
+    for (const r of this.model.findComponents('render') as pc.RenderComponent[]) { r.castShadows = true; r.receiveShadows = true; }
+    this.visual.addChild(this.model);
+    this.anim = new PlayerAnimation(this.model, assets.animTracks());
+
+    this.rope = new pc.Entity('rope');
+    this.rope.addComponent('render', { type: 'cylinder', material: emissive(new pc.Color(0.6, 0.9, 1), 2) });
+    this.rope.enabled = false;
+    app.root.addChild(this.rope);
+
     app.root.addChild(this.entity);
   }
 
@@ -57,15 +43,29 @@ export class Player {
     m.update(dt, input, camYaw);
     this.entity.setPosition(m.position);
 
+    // facing + lean into wall-runs / turns
     const yaw = Math.atan2(-m.facing.x, -m.facing.z) * pc.math.RAD_TO_DEG;
-    this.visual.setEulerAngles(0, yaw, 0);
+    const targetLean = m.state === 'wallrun' ? -m.wallSide * 22 : 0;
+    this.lean += (targetLean - this.lean) * (1 - Math.exp(-dt * 10));
+    this.visual.setEulerAngles(0, yaw, this.lean);
+    // mirror the single wall-run clip for the other side
+    this.model.setLocalScale(m.state === 'wallrun' && m.wallSide < 0 ? -1 : 1, 1, 1);
 
-    if (m.events.includes('dash')) this.dashFlash = 1;
-    this.dashFlash = Math.max(0, this.dashFlash - dt * 5);
-    this.trail.enabled = this.dashFlash > 0;
-    if (this.trail.enabled) {
-      const s = 1 + this.dashFlash * 0.4;
-      this.trail.setLocalScale(TUNING.radius * 2.6 * s, TUNING.height * 1.1, TUNING.radius * 2.6 * s);
+    this.anim.update(dt, m);
+
+    // grapple rope
+    if (m.grappleAnchor) {
+      const a = m.grappleAnchor;
+      const hand = new pc.Vec3(m.position.x, m.position.y + TUNING.height * 0.7, m.position.z);
+      const mid = new pc.Vec3().add2(a, hand).mulScalar(0.5);
+      const len = a.distance(hand);
+      this.rope.enabled = true;
+      this.rope.setPosition(mid);
+      this.rope.setLocalScale(0.05, len, 0.05);
+      this.rope.lookAt(a);
+      this.rope.rotateLocal(90, 0, 0);
+    } else {
+      this.rope.enabled = false;
     }
   }
 }

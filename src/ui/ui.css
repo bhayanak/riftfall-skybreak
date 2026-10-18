@@ -21,12 +21,20 @@ canvas#game { position: fixed; inset: 0; width: 100%; height: 100%; display: blo
   text-shadow: 0 1px 2px rgba(0,0,0,0.6);
 }
 #hud .label { color: var(--hud-dim); font-size: 0.75em; margin-right: 0.4em; }
-#flow-mult { color: var(--accent); font-size: 1.35em; }
+#flow-mult { color: var(--accent); font-size: 1.35em; transition: color 150ms; }
+#flow.hot #flow-mult { color: var(--accent-hot); text-shadow: 0 0 12px var(--accent-hot); }
+#biome { color: var(--hud-dim); font-size: 0.8em; letter-spacing: 0.25em; align-self: center; }
 #flow-bar { width: clamp(90px, 18vmin, 180px); height: 5px; margin-top: 4px; background: rgba(255,255,255,0.15); border-radius: 3px; overflow: hidden; }
 #flow-bar i { display: block; height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), #b388ff); transition: width 80ms linear; }
+#rift {
+  position: absolute; right: calc(14px + var(--safe-r)); bottom: calc(14px + var(--safe-b));
+  font-weight: 700; font-size: clamp(14px, 2.2vmin, 20px); letter-spacing: 0.06em; text-shadow: 0 1px 2px rgba(0,0,0,0.6);
+}
+#rift.close #rift-val { color: var(--accent-hot); animation: pulse 0.5s infinite alternate; }
+@keyframes pulse { from { opacity: 1; } to { opacity: 0.45; } }
 #hint {
   position: absolute; left: calc(14px + var(--safe-l)); bottom: calc(14px + var(--safe-b));
-  font-size: clamp(12px, 1.8vmin, 16px); letter-spacing: 0.18em; color: var(--hud-dim);
+  font-size: clamp(12px, 1.8vmin, 16px); letter-spacing: 0.18em; color: var(--hud-dim); transition: opacity 400ms;
 }
 
 #touch { position: fixed; inset: 0; pointer-events: none; }
@@ -49,10 +57,36 @@ canvas#game { position: fixed; inset: 0; width: 100%; height: 100%; display: blo
   font: 700 clamp(9px, 1.8vmin, 12px)/1 system-ui; letter-spacing: 0.08em; touch-action: none; -webkit-tap-highlight-color: transparent;
 }
 .touch-btn.big { width: 20vmin; height: 20vmin; max-width: 110px; max-height: 110px; grid-row: span 2; }
+.touch-btn.small { width: 11vmin; height: 11vmin; max-width: 64px; max-height: 64px; }
 .touch-btn:active, .touch-btn.down { background: rgba(90, 209, 255, 0.35); border-color: var(--accent); }
 #btn-grapple { grid-column: 1; }
 #btn-dash { grid-column: 1; }
 #btn-jump { grid-column: 2; grid-row: 1 / span 2; }
+#btn-slide { grid-column: 2; justify-self: end; }
+
+#overlay {
+  position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+  background: radial-gradient(ellipse at center, rgba(10, 14, 30, 0.55), rgba(5, 6, 14, 0.9));
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); z-index: 10;
+}
+#overlay[hidden] { display: none; }
+#ov-panel { text-align: center; padding: 24px; max-width: 920px; width: 100%; }
+#ov-title { margin: 0; font-size: clamp(28px, 6vmin, 56px); letter-spacing: 0.22em; font-weight: 800; color: #fff; text-shadow: 0 0 24px rgba(90,209,255,0.6); }
+#ov-sub { margin: 6px 0 22px; letter-spacing: 0.3em; color: var(--accent); font-weight: 600; font-size: clamp(12px, 2vmin, 16px); }
+#ov-foot { margin-top: 18px; letter-spacing: 0.25em; color: var(--hud-dim); font-size: clamp(11px, 1.8vmin, 14px); }
+#ov-cards { display: flex; gap: clamp(10px, 2vmin, 22px); justify-content: center; flex-wrap: wrap; }
+.card {
+  position: relative; width: clamp(150px, 24vmin, 230px); min-height: clamp(150px, 26vmin, 240px); padding: 18px 14px 14px;
+  border-radius: 14px; border: 2px solid rgba(255,255,255,0.18); background: linear-gradient(180deg, rgba(40,60,110,0.55), rgba(15,20,45,0.75));
+  color: var(--hud-fg); cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+  transition: transform 120ms, border-color 120ms, box-shadow 120ms; font-family: inherit;
+}
+.card.hover, .card:hover { transform: translateY(-6px) scale(1.03); border-color: var(--accent); box-shadow: 0 10px 40px rgba(90,209,255,0.35); }
+.card .key { position: absolute; top: 8px; left: 12px; font-size: 12px; color: var(--hud-dim); }
+.card .icon { font-size: clamp(30px, 6vmin, 48px); color: var(--accent); line-height: 1; }
+.card .name { font-weight: 800; letter-spacing: 0.14em; font-size: clamp(12px, 2vmin, 16px); }
+.card .desc { font-size: clamp(11px, 1.7vmin, 13px); color: var(--hud-dim); line-height: 1.35; }
+.card.single { width: clamp(200px, 30vmin, 280px); min-height: 120px; }
 
 #debug {
   position: fixed; top: calc(52px + var(--safe-t)); left: calc(14px + var(--safe-l)); margin: 0;

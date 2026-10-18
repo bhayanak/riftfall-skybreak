@@ -1,12 +1,18 @@
-export type Action = 'jump' | 'dash' | 'grapple' | 'restart' | 'debug';
+export type Action = 'jump' | 'dash' | 'grapple' | 'slide' | 'restart' | 'debug' | 'pick1' | 'pick2' | 'pick3' | 'confirm';
 
 const KEYS: Record<string, Action> = {
   Space: 'jump',
   ShiftLeft: 'dash',
   ShiftRight: 'dash',
   KeyE: 'grapple',
+  KeyC: 'slide',
+  ControlLeft: 'slide',
   KeyR: 'restart',
   Backquote: 'debug',
+  Digit1: 'pick1',
+  Digit2: 'pick2',
+  Digit3: 'pick3',
+  Enter: 'confirm',
 };
 
 /**

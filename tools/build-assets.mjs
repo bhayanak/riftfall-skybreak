@@ -24,6 +24,28 @@ const COPIES = [
   ['proto/coin.glb',   join(KENNEY_KIT, 'coin.glb')],
   // Kenney kit GLBs reference this external texture by relative path
   ['proto/Textures/colormap.png', join(KENNEY_KIT, 'Textures', 'colormap.png')],
+
+  // skies (Poly Haven, CC0) — 1k for now; 2k desktop variant lands with quality profiles
+  ['sky/sky_ruins.hdr', join(SRC, 'polyhaven', 'kloofendal_48d_partly_cloudy_puresky_1k.hdr')],
+  ['sky/fire_rift.hdr', join(SRC, 'polyhaven', 'the_sky_is_on_fire_1k.hdr')],
+  ['sky/void.hdr',      join(SRC, 'polyhaven', 'satara_night_1k.hdr')],
+
+  // sfx (Kenney, CC0)
+  ['sfx/jump.ogg',     join(SRC, 'kenney', 'digital-audio', 'Audio', 'phaseJump1.ogg')],
+  ['sfx/djump.ogg',    join(SRC, 'kenney', 'digital-audio', 'Audio', 'phaseJump3.ogg')],
+  ['sfx/land.ogg',     join(SRC, 'kenney', 'impact-sounds', 'Audio', 'impactSoft_medium_000.ogg')],
+  ['sfx/land_hard.ogg',join(SRC, 'kenney', 'impact-sounds', 'Audio', 'impactSoft_heavy_001.ogg')],
+  ['sfx/dash.ogg',     join(SRC, 'kenney', 'sci-fi-sounds', 'Audio', 'thrusterFire_000.ogg')],
+  ['sfx/wallrun.ogg',  join(SRC, 'kenney', 'impact-sounds', 'Audio', 'footstep_concrete_002.ogg')],
+  ['sfx/grapple.ogg',  join(SRC, 'kenney', 'sci-fi-sounds', 'Audio', 'laserRetro_002.ogg')],
+  ['sfx/slide.ogg',    join(SRC, 'kenney', 'impact-sounds', 'Audio', 'footstep_grass_003.ogg')],
+  ['sfx/pickup.ogg',   join(SRC, 'kenney', 'digital-audio', 'Audio', 'pepSound2.ogg')],
+  ['sfx/flow_up.ogg',  join(SRC, 'kenney', 'digital-audio', 'Audio', 'powerUp5.ogg')],
+  ['sfx/portal.ogg',   join(SRC, 'kenney', 'sci-fi-sounds', 'Audio', 'forceField_001.ogg')],
+  ['sfx/death.ogg',    join(SRC, 'kenney', 'sci-fi-sounds', 'Audio', 'lowFrequency_explosion_000.ogg')],
+  ['sfx/ui_select.ogg',join(SRC, 'kenney', 'interface-sounds', 'Audio', 'select_001.ogg')],
+  ['sfx/ui_confirm.ogg',join(SRC, 'kenney', 'interface-sounds', 'Audio', 'confirmation_002.ogg')],
+  ['sfx/checkpoint.ogg',join(SRC, 'kenney', 'digital-audio', 'Audio', 'highUp.ogg')],
 ];
 
 let missing = 0, total = 0;

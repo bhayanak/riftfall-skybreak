@@ -3,15 +3,16 @@ import type { Input } from '../core/Input';
 import type { CollisionWorld } from '../world/Colliders';
 
 const CAM = {
-  distance: 6.5,
-  height: 1.7,
+  distance: 6.0,
+  height: 1.6,
   pitchMin: -40,
   pitchMax: 65,
-  defaultPitch: 14,
+  defaultPitch: 12,
   mouseSens: 0.12,
   followLag: 18,
-  baseFov: 72,
-  speedFov: 16,
+  baseFov: 70,
+  speedFov: 14,
+  flowFov: 6,
   dashFovPulse: 10,
   shakeDecay: 6,
 };
@@ -27,6 +28,7 @@ export class CameraRig {
   private smoothTarget = new pc.Vec3();
   private fovPulse = 0;
   private shake = 0;
+  private flow = 0;
   private shakeSeed = Math.random() * 100;
   private tmp = new pc.Vec3();
   private reduceShake: boolean;
@@ -35,14 +37,14 @@ export class CameraRig {
     this.reduceShake = reduceEffects;
     this.entity = new pc.Entity('camera');
     this.entity.addComponent('camera', {
-      clearColor: new pc.Color(0.52, 0.72, 0.95),
       fov: CAM.baseFov,
       nearClip: 0.1,
-      farClip: 600,
+      farClip: 900,
     });
-    this.entity.camera!.toneMapping = pc.TONEMAP_ACES;
     app.root.addChild(this.entity);
   }
+
+  setFlow(f01: number): void { this.flow = f01; }
 
   snapTo(pos: pc.Vec3, yaw: number): void {
     this.yaw = yaw; this.pitch = CAM.defaultPitch;
@@ -91,7 +93,7 @@ export class CameraRig {
 
     const speedK = pc.math.clamp((speedXZ - 6) / 18, 0, 1);
     const cam = this.entity.camera!;
-    const targetFov = CAM.baseFov + speedK * CAM.speedFov + this.fovPulse;
+    const targetFov = CAM.baseFov + speedK * CAM.speedFov + this.flow * CAM.flowFov + this.fovPulse;
     cam.fov = pc.math.lerp(cam.fov, targetFov, 1 - Math.exp(-dt * 10));
   }
 }

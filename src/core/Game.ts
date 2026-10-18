@@ -1,43 +1,74 @@
 import * as pc from 'playcanvas';
 import { detectDevice, type DeviceInfo } from './Device';
 import { Input } from './Input';
+import { Assets } from './Assets';
 import { CollisionWorld } from '../world/Colliders';
-import { Greybox } from '../world/Greybox';
+import { WorldGenerator } from '../world/WorldGenerator';
+import { Rift } from '../world/Rift';
+import { Rng } from '../world/Rng';
 import { Player } from '../player/Player';
+import { defaultStats } from '../player/Movement';
 import { CameraRig } from '../graphics/CameraRig';
+import { Environment, BIOMES, type BiomeId } from '../graphics/Environment';
+import { VFX } from '../graphics/VFX';
+import { FlowSystem } from '../progression/FlowSystem';
+import { UpgradeDeck } from '../progression/Upgrade';
+import { Sfx } from '../audio/Sfx';
 import { Hud } from '../ui/Hud';
 import { TouchControls } from '../ui/TouchControls';
+import { Overlays } from '../ui/Overlays';
+
+type Phase = 'loading' | 'playing' | 'portal' | 'upgrade' | 'dead';
+const BIOME_ORDER: BiomeId[] = ['sky', 'fire', 'void'];
 
 export class Game {
   readonly app: pc.AppBase;
   readonly device: DeviceInfo;
   readonly input: Input;
+  readonly assets: Assets;
   readonly world = new CollisionWorld();
   readonly hud = new Hud();
+  readonly overlays = new Overlays();
+  readonly flow = new FlowSystem();
+  readonly deck = new UpgradeDeck();
+  readonly sfx: Sfx;
   player!: Player;
   camera!: CameraRig;
-  greybox!: Greybox;
+  env!: Environment;
+  gen!: WorldGenerator;
+  rift!: Rift;
+  vfx!: VFX;
+
+  phase: Phase = 'loading';
+  seed = (Date.now() % 100000) | 0;
+  stage = 0;              // 0 sky, 1 fire, 2 void, 3 sky(harder)...
+  energy = 0;
+  distance = 0;
   private checkpoint = 0;
-  private fps = 60;
-  private fpsAcc = 0;
-  private fpsFrames = 0;
   private runTime = 0;
-  private finished = false;
+  private started = false;     // player has moved; the Rift clock runs from here
+  private riftGrace = 0;
+  private runId = 0;
+  private fps = 60; private fpsAcc = 0; private fpsFrames = 0;
   private drawCalls = 0;
+  private hintTimer = 0;
+  private hintStage = 0;
 
   private constructor(app: pc.AppBase, canvas: HTMLCanvasElement, device: DeviceInfo) {
     this.app = app;
     this.device = device;
     this.input = new Input(canvas);
+    const base = `${import.meta.env.BASE_URL}assets/`;
+    this.assets = new Assets(app, base);
+    this.sfx = new Sfx(base);
   }
 
   static async create(canvas: HTMLCanvasElement): Promise<Game> {
     const device = detectDevice();
-    // WebGL2 is the compatibility baseline (D1/plan). WebGPU is opt-in via ?gpu until the shader path is validated.
     const wantGpu = device.hasWebGPU && new URLSearchParams(location.search).has('gpu');
     const gfx = await pc.createGraphicsDevice(canvas, {
       deviceTypes: wantGpu ? [pc.DEVICETYPE_WEBGPU, pc.DEVICETYPE_WEBGL2] : [pc.DEVICETYPE_WEBGL2],
-      antialias: device.profile !== 'mobile-low',
+      antialias: false,
       alpha: false,
       powerPreference: 'high-performance',
     });
@@ -45,8 +76,8 @@ export class Game {
 
     const opts = new pc.AppOptions();
     opts.graphicsDevice = gfx;
-    opts.componentSystems = [pc.RenderComponentSystem, pc.CameraComponentSystem, pc.LightComponentSystem];
-    opts.resourceHandlers = [pc.TextureHandler, pc.ContainerHandler, pc.RenderHandler, pc.MaterialHandler];
+    opts.componentSystems = [pc.RenderComponentSystem, pc.CameraComponentSystem, pc.LightComponentSystem, pc.AnimComponentSystem];
+    opts.resourceHandlers = [pc.TextureHandler, pc.ContainerHandler, pc.RenderHandler, pc.MaterialHandler, pc.AnimClipHandler, pc.AnimStateGraphHandler];
 
     const app = new pc.AppBase(canvas);
     app.init(opts);
@@ -55,100 +86,224 @@ export class Game {
     window.addEventListener('resize', () => app.resizeCanvas());
 
     const game = new Game(app, canvas, device);
-    await game.setupScene();
     app.on('update', (dt: number) => game.update(dt));
     app.on('frameend', () => { game.drawCalls = (gfx as pc.GraphicsDevice & { _drawCallsPerFrame?: number })._drawCallsPerFrame ?? 0; });
     app.start();
+    await game.boot();
     return game;
   }
 
-  private async setupScene(): Promise<void> {
-    const app = this.app;
-    const sky = new pc.Color(0.52, 0.72, 0.95);
-    app.scene.ambientLight = new pc.Color(0.38, 0.45, 0.6);
-    app.scene.fog.type = pc.FOG_LINEAR;
-    app.scene.fog.color = sky;
-    app.scene.fog.start = 70;
-    app.scene.fog.end = 240;
+  private async boot(): Promise<void> {
+    this.overlays.loading(0);
+    await this.assets.loadAll((d, t) => this.overlays.loading((d / t) * 0.8));
 
-    const sun = new pc.Entity('sun');
-    sun.addComponent('light', {
-      type: 'directional',
-      color: new pc.Color(1, 0.95, 0.85),
-      intensity: 1.6,
-      castShadows: this.device.profile !== 'mobile-low',
-      shadowDistance: 70,
-      shadowResolution: this.device.profile === 'desktop' ? 2048 : 1024,
-      shadowBias: 0.2,
-      normalOffsetBias: 0.06,
-      numCascades: this.device.profile === 'desktop' ? 2 : 1,
-    });
-    sun.setEulerAngles(52, 35, 0);
-    app.root.addChild(sun);
-
-    const assetsBase = `${import.meta.env.BASE_URL}assets/`;
-    this.greybox = new Greybox(app, this.world, assetsBase);
-    await this.greybox.build();
-
-    this.player = new Player(app, this.world);
-    this.camera = new CameraRig(app, this.device.isMobile, this.world);
+    this.env = new Environment(this.app, this.assets, this.device);
+    this.gen = new WorldGenerator(this.app, this.assets, this.world);
+    this.rift = new Rift(this.app);
+    this.vfx = new VFX(this.app, this.device.profile === 'mobile-low' ? 60 : 160);
+    this.player = new Player(this.app, this.assets, this.world);
+    this.camera = new CameraRig(this.app, this.device.isMobile, this.world);
+    this.env.attachPost(this.camera.entity.camera!);
     if (this.device.isTouch) new TouchControls(this.input);
+    this.player.movement.anchorProvider = (pos, fwd, range) => this.gen.findAnchor(pos, fwd, range)?.pos ?? null;
 
-    this.restart();
-    this.hud.showHint(this.device.isTouch ? 'DRAG RIGHT SIDE TO LOOK · REACH THE FLAG' : 'CLICK TO CAPTURE MOUSE · WASD · SPACE · SHIFT', 6);
+    await this.startRun(true);
   }
 
-  private restart(): void {
+  // ------------------------------------------------------------------------------------ run flow
+  private biome() { return BIOMES[BIOME_ORDER[this.stage % BIOME_ORDER.length]]; }
+
+  private async startRun(fresh: boolean): Promise<void> {
+    this.phase = 'loading';
+    const id = ++this.runId;
+    if (fresh) {
+      this.stage = 0; this.energy = 0; this.distance = 0;
+      this.player.movement.stats = defaultStats();
+      this.deck.reset();
+      this.flow.reset();
+      this.seed = (this.seed * 1103515245 + 12345) >>> 0;
+    }
+    const b = this.biome();
+    this.overlays.loading(0.9);
+    await this.env.setBiome(b.id);
+    if (id !== this.runId) return;
+    const difficulty = 0.6 + this.stage * 0.5;
+    this.gen.generate(this.seed + this.stage * 7919, b, difficulty, 10 + Math.min(4, this.stage));
+    this.player.movement.killY = this.gen.lowestTop() - 30;
+    this.rift.setColor(b.rift);
+    this.vfx.setColor(b.rift);
+    this.hud.setBiome(b.name);
+    this.flow.decayMult = this.player.movement.stats.flowDecayMult;
     this.checkpoint = 0;
     this.runTime = 0;
-    this.finished = false;
-    this.player.movement.respawn(this.greybox.spawn);
-    this.camera.snapTo(this.greybox.spawn, 0);
+    this.started = false;
+    this.riftGrace = 0;
+    this.player.movement.respawn(this.gen.spawn);
+    this.player.movement.events.length = 0;
+    this.camera.snapTo(this.gen.spawn, 0);
+    this.rift.reset(this.gen.spawn.z + 55, 0);
+    this.hintStage = 0;
+    this.hud.showHint(this.device.isTouch ? `${b.name} · RUN. THE RIFT IS BEHIND YOU.` : `${b.name} · WASD · SPACE JUMP · SHIFT DASH · E GRAPPLE · C SLIDE`, 6);
+    this.overlays.hide();
+    this.phase = 'playing';
   }
 
-  private respawn(): void {
-    const cp = this.greybox.checkpointAt(this.checkpoint) ?? { spawn: this.greybox.spawn };
+  private respawnAtCheckpoint(): void {
+    const cp = this.gen.checkpoints[this.checkpoint] ?? this.gen.checkpoints[0];
     this.player.movement.respawn(cp.spawn);
-    this.camera.kick(0.6);
+    this.camera.snapTo(cp.spawn, this.camera.yaw);
+    // push the Rift back behind the checkpoint and bring back anything it already swallowed there
+    this.rift.reset(Math.max(this.rift.z, cp.spawn.z + 32), this.rift.speed);
+    this.gen.restoreAhead(this.rift.z);
+    this.riftGrace = 1.5;
+    this.energy = Math.max(0, this.energy - 25);
+    this.flow.reset();
+    this.camera.kick(0.8);
+    this.sfx.play('death', 0.6, 1.4);
+    this.hud.showHint('FELL · −25 ENERGY', 1.5);
   }
 
+  private async onPortal(): Promise<void> {
+    this.phase = 'portal';
+    const id = this.runId;
+    this.sfx.play('portal', 0.9);
+    this.camera.pulse(18);
+    this.energy += 100 * this.flow.multiplier;
+    this.vfx.emit(this.gen.portalPos, 60, 8, 0.4, 1.2, 1.5, 3);
+    await new Promise((r) => setTimeout(r, 650));
+    if (id !== this.runId) return;
+    this.phase = 'upgrade';
+    const rng = new Rng(this.seed ^ (this.stage * 2654435761));
+    const options = this.deck.offer(rng, 3);
+    const nextName = BIOMES[BIOME_ORDER[(this.stage + 1) % BIOME_ORDER.length]].name;
+    this.sfx.play('ui_select', 0.6);
+    const i = await this.overlays.chooseUpgrade(nextName, this.energy, options);
+    if (id !== this.runId) return;
+    this.deck.take(options[i], this.player.movement.stats);
+    this.sfx.play('ui_confirm', 0.8);
+    this.stage++;
+    await this.startRun(false);
+  }
+
+  private async onDeath(reason: string): Promise<void> {
+    this.phase = 'dead';
+    const id = this.runId;
+    this.sfx.play('death', 1);
+    this.camera.kick(1.5);
+    this.vfx.emit(this.player.movement.position, 50, 10, 0.4, 1, 1, 2);
+    await new Promise((r) => setTimeout(r, 900));
+    if (id !== this.runId) return;
+    await this.overlays.runOver(reason, this.energy, this.flow.best, this.distance);
+    if (id !== this.runId) return;
+    this.sfx.play('ui_confirm', 0.8);
+    await this.startRun(true);
+  }
+
+  // ------------------------------------------------------------------------------------ frame
   private update(dt: number): void {
     const input = this.input;
     input.beginFrame();
 
-    if (input.wasPressed('restart')) this.restart();
+    if (this.overlays.visible) {
+      if (input.wasPressed('pick1')) this.overlays.pick(0);
+      else if (input.wasPressed('pick2')) this.overlays.pick(1);
+      else if (input.wasPressed('pick3')) this.overlays.pick(2);
+      else if (input.wasPressed('jump') || input.wasPressed('confirm')) this.overlays.pick(this.phase === 'dead' ? 0 : this.overlays.hover);
+      input.endFrame();
+      return;
+    }
+    if (this.phase !== 'playing') {
+      if (this.gen && this.player) this.gen.update(dt, this.player.movement.position);
+      this.vfx?.update(dt);
+      input.endFrame();
+      return;
+    }
+
+    if (input.wasPressed('restart')) { void this.startRun(true); input.endFrame(); return; }
     if (input.wasPressed('debug')) this.hud.toggleDebug();
 
     const m = this.player.movement;
+    if (!this.started && (Math.abs(input.move.x) + Math.abs(input.move.y) > 0.1 || input.wasPressed('jump'))) this.started = true;
+    if (this.started) this.runTime += dt;
+    this.riftGrace = Math.max(0, this.riftGrace - dt);
     this.player.update(dt, input, this.camera.yawRad);
     this.camera.update(dt, input, m.position, m.speedXZ);
+    this.camera.setFlow(this.flow.intensity01);
+    this.gen.update(dt, m.position);
+    this.distance = Math.max(this.distance, this.gen.spawn.z - m.position.z);
 
-    // checkpoints + goal
-    const trig = this.world.firstOverlap(m.position, 0.4, 1.8, 'checkpoint');
-    if (trig && trig.data > this.checkpoint) {
-      this.checkpoint = trig.data;
-      this.hud.showHint(`CHECKPOINT ${trig.data}`, 1.5);
+    // rift pressure: starts 2 s after the first move, ramps with stage and time; paused briefly after a fall
+    const riftSpeed = !this.started || this.runTime < 2 || this.riftGrace > 0 ? 0 : Math.min(7.5 + this.stage * 0.8, 4.5 + this.stage * 0.8 + this.runTime * 0.08);
+    this.rift.speed = riftSpeed;
+    this.rift.update(dt, m.position.z, m.position.y);
+    this.gen.riftSweep(this.rift.z);
+    const riftDist = this.rift.distanceTo(m.position.z);
+    this.hud.setRift(riftDist);
+    if (riftDist < 0) {
+      if (m.stats.riftShield > 0) {
+        m.stats.riftShield--;
+        this.rift.reset(m.position.z + 30, this.rift.speed);
+        this.hud.showHint('RIFT SHIELD SPENT', 2);
+        this.sfx.play('flow_up', 1, 0.6);
+        this.camera.kick(1);
+      } else {
+        void this.onDeath('CONSUMED BY THE RIFT');
+        input.endFrame();
+        return;
+      }
     }
-    if (!this.finished && m.grounded && m.position.distance(this.greybox.goal) < 3) {
-      this.finished = true;
-      this.hud.showHint(`RIFT REACHED · ${this.runTime.toFixed(2)}s · R TO RESTART`, 10);
-      this.camera.pulse(14);
-    }
-    if (!this.finished) this.runTime += dt;
 
-    // movement events -> feel hooks
+    for (const cp of this.gen.checkpoints) {
+      if (cp.index > this.checkpoint && m.grounded && Math.abs(cp.spawn.z - m.position.z) < 4 && Math.abs(cp.spawn.x - m.position.x) < 8) {
+        this.checkpoint = cp.index;
+        this.sfx.play('checkpoint', 0.35, 1.2, 0.5);
+      }
+    }
+
+    const got = this.gen.collectGems(m.position, m.stats.magnetRadius);
+    if (got) {
+      this.energy += got * 10 * this.flow.multiplier;
+      this.sfx.play('pickup', 0.5, 0.9 + this.flow.level * 0.08, 0.04);
+      this.vfx.emit(new pc.Vec3(m.position.x, m.position.y + 1, m.position.z), 6, 4, 0.2, 0.4, 0, 2);
+    }
+
     for (const ev of m.events) {
-      if (ev === 'dash') this.camera.pulse();
-      else if (ev === 'land-hard') this.camera.kick(0.8);
-      else if (ev === 'land') this.camera.kick(0.25);
-      else if (ev === 'fell') this.respawn();
+      const up = this.flow.onEvent(ev);
+      if (up) { this.sfx.play('flow_up', 0.6, 0.8 + this.flow.level * 0.1); this.camera.pulse(6); }
+      switch (ev) {
+        case 'dash': this.camera.pulse(); this.sfx.play('dash', 0.7); this.vfx.emit(m.position, 14, 6, 0.3, 0.5, 0, 1); break;
+        case 'jump': this.sfx.play('jump', 0.45, 1.1); break;
+        case 'djump': this.sfx.play('djump', 0.6, 1.2); this.vfx.emit(new pc.Vec3(m.position.x, m.position.y + 0.2, m.position.z), 10, 5, 0.25, 0.5); break;
+        case 'land': this.camera.kick(0.2); this.sfx.play('land', 0.5); break;
+        case 'land-hard': this.camera.kick(0.8); this.sfx.play('land_hard', 0.8); this.vfx.emit(m.position, 12, 5, 0.25, 0.5); break;
+        case 'wallrun': this.sfx.play('wallrun', 0.6, 0.9); break;
+        case 'walljump': this.sfx.play('jump', 0.6, 1.3); this.camera.pulse(5); break;
+        case 'slide': this.sfx.play('slide', 0.6, 0.8); break;
+        case 'vault': this.sfx.play('wallrun', 0.5, 1.3); break;
+        case 'grapple': this.sfx.play('grapple', 0.7); this.camera.pulse(6); break;
+        case 'grapple-release': this.camera.pulse(8); break;
+        case 'fell': this.respawnAtCheckpoint(); break;
+      }
     }
     m.events.length = 0;
 
-    // HUD placeholders until FLOW/energy systems land (Phase 2)
-    const speedK = pc.math.clamp(m.speedXZ / 24, 0, 1);
-    this.hud.setFlow(1 + Math.floor(speedK * 4), speedK);
-    this.hud.setEnergy(Math.floor(this.runTime * 3));
+    this.flow.update(dt, m.speedXZ, m.grounded);
+    this.env.setIntensity(this.flow.intensity01);
+    this.vfx.trail(dt, m.position, (m.state === 'dash' ? 0.6 : 0) + this.flow.intensity01 * pc.math.clamp((m.speedXZ - 6) / 10, 0, 1));
+    this.vfx.update(dt);
+
+    if (this.gen.atPortal(m.position)) { void this.onPortal(); input.endFrame(); return; }
+
+    this.hintTimer -= dt;
+    if (this.stage === 0 && this.hintTimer <= 0) {
+      const z = this.gen.spawn.z - m.position.z;
+      if (this.hintStage === 0 && z > 20) { this.hud.showHint(this.device.isTouch ? 'DASH IN THE AIR TO CROSS BIG GAPS' : 'SHIFT IN THE AIR TO CROSS BIG GAPS', 4); this.hintStage = 1; this.hintTimer = 8; }
+      else if (this.hintStage === 1 && this.gen.anchors.some((a) => a.pos.z < m.position.z && a.pos.z > m.position.z - 24)) { this.hud.showHint(this.device.isTouch ? 'GRAPPLE WHEN THE RING IS AHEAD' : 'PRESS E WHEN THE RING IS AHEAD', 4); this.hintStage = 2; this.hintTimer = 8; }
+      else if (this.hintStage === 2 && m.wallContact) { this.hud.showHint('JUMP INTO WALLS TO RUN ALONG THEM', 3); this.hintStage = 3; }
+    }
+
+    this.hud.setFlow(this.flow.multiplier, this.flow.progress01);
+    this.hud.setEnergy(this.energy);
     this.hud.update(dt);
 
     this.fpsAcc += dt; this.fpsFrames++;
@@ -156,10 +311,10 @@ export class Game {
     if (this.hud.debugVisible) {
       const p = m.position;
       this.hud.setDebug(
-        `fps ${this.fps}  draw ${this.drawCalls}  ${this.device.profile} ${this.app.graphicsDevice.deviceType}\n` +
-        `state ${m.state}${m.grounded ? ' grounded' : ''}${m.wallContact ? ' wall' : ''}  dash ${m.dashChargesLeft}\n` +
-        `pos ${p.x.toFixed(1)} ${p.y.toFixed(1)} ${p.z.toFixed(1)}  vel ${m.speedXZ.toFixed(1)} / ${m.velocity.y.toFixed(1)}\n` +
-        `cp ${this.checkpoint}  t ${this.runTime.toFixed(1)}  cam ${this.camera.yaw.toFixed(0)}°/${this.camera.pitch.toFixed(0)}°`,
+        `fps ${this.fps}  draw ${this.drawCalls}  ${this.device.profile} ${this.app.graphicsDevice.deviceType}  seed ${this.seed} stage ${this.stage}\n` +
+        `state ${m.state}${m.grounded ? ' grounded' : ''}${m.wallContact ? ' wall' : ''}  dash ${m.dashChargesLeft}  airjumps ${m.airJumpsLeft}\n` +
+        `pos ${p.x.toFixed(1)} ${p.y.toFixed(1)} ${p.z.toFixed(1)}  vel ${m.speedXZ.toFixed(1)} / ${m.velocity.y.toFixed(1)}  rift ${riftDist.toFixed(0)}m @${riftSpeed.toFixed(1)}\n` +
+        `cp ${this.checkpoint}/${this.gen.checkpoints.length - 1}  flow L${this.flow.level} w${this.flow.window.toFixed(1)}  t ${this.runTime.toFixed(1)}`,
       );
     }
 

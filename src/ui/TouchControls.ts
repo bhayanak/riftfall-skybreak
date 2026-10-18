@@ -36,9 +36,10 @@ export class TouchControls {
     this.bindButton('btn-jump', 'jump');
     this.bindButton('btn-dash', 'dash');
     this.bindButton('btn-grapple', 'grapple');
+    this.bindButton('btn-slide', 'slide');
   }
 
-  private bindButton(id: string, action: 'jump' | 'dash' | 'grapple'): void {
+  private bindButton(id: string, action: 'jump' | 'dash' | 'grapple' | 'slide'): void {
     const el = document.getElementById(id)!;
     const down = (e: Event) => { e.preventDefault(); el.classList.add('down'); this.input.setTouchAction(action, true); };
     const up = (e: Event) => { e.preventDefault(); el.classList.remove('down'); this.input.setTouchAction(action, false); };
