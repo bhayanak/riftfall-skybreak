@@ -15,12 +15,15 @@ This file is the *what-to-do-next* plan; [progress.md](progress.md) is the *what
 | D4 | **Dash = `Roll`/`Shield_Dash`, Fall = `Jump_Loop`, Vault = `ClimbUp_1m`, Stumble = `Hit_Knockback`, Victory = `Dance_Loop`** for MVP | Avoids blocking Phase 1–3 on manual Mixamo work |
 | D5 | **Wall-run for MVP = `Sprint_Loop` + procedural spine/root lean (~25°)** | Cheap, reads well at speed; replace with a Mixamo clip in Phase 5 if it looks off |
 | D6 | **Greybox with Kenney Prototype Kit + Prototype Textures** in Phase 1–2 | Real collision shapes, zero art time |
-| D7 | **Raw downloads live in `assets-source/` (git-ignored). Shipped assets live in `assets/`** and are always produced by the pipeline | Keeps repo small, keeps the sub-20 MB budget honest |
+| D7 | **Raw downloads live in `assets-source/` (git-ignored). Shipped assets live in `public/assets/`** and are always produced by the pipeline | Keeps repo small, keeps the sub-20 MB budget honest; Vite serves `public/` verbatim |
 | D8 | Sky = **HDRI 1k (mobile) / 2k (desktop)** as skybox + light probe, clouds as card layers on top | Biggest "wow per KB" available |
 | D9 | Textures ship at **≤1K, KTX2/Basis compressed**; sources are 1K JPG from ambientCG | Matches texture budget table in the vision doc |
+| D10 | **Physics = custom kinematic capsule vs OBB colliders** (no Ammo) — `src/world/Colliders.ts` + `src/player/Movement.ts` | Parkour needs authored feel; 3-sphere capsule + iterative push-out + substepping is deterministic, tiny, and gives clean wall normals for wall-run. Resolves O1 |
+| D11 | **PlayCanvas `AppBase` with explicit systems/handlers, WebGL2 default, WebGPU behind `?gpu`** | Lean bundle (311 KB gzip engine); WebGPU validated later |
+| D12 | **Mixamo clips retargeted in headless Blender via rest-pose delta** (`tools/build-player-anims.py`), no Rokoko/ARP | Reproducible from CLI; checked error ≤ 0.11 normalised |
 
 Open decisions (answer when reached):
-- O1 Physics: PlayCanvas Ammo (full rigid bodies) vs. a custom kinematic character controller with capsule sweeps. *Lean: custom kinematic — parkour needs authored feel, not simulation.* Decide at end of Phase 1.
+- ~~O1 Physics~~ → resolved as D10.
 - O2 Audio: Kenney SFX packs cover UI/impacts/sci-fi; **music source still unchosen** (needs CC0/CC-BY loop stems for FLOW layers). Decide in Phase 3.
 - O3 Cloud rendering: card layers vs. a single panoramic cloud texture. Decide in Phase 3 after HDRI test.
 
@@ -36,7 +39,7 @@ Open decisions (answer when reached):
 | Core locomotion | UAL1 | `Idle_Loop, Walk_Loop, Jog_Fwd_Loop, Sprint_Loop, Jump_Start, Jump_Loop, Jump_Land, Roll, Crouch_*` |
 | Slide / vault / dash / stumble / ninja-jump | UAL2 | `Slide_Start/Loop/Exit, ClimbUp_1m, Shield_Dash, Hit_Knockback, NinjaJump_Start/Idle_Loop/Land` |
 | Victory / death | UAL1 | `Dance_Loop, Death01` |
-| Wall-run, grapple swing, hard landing, flip | **Mixamo (manual)** | see `assets-source/MANUAL-DOWNLOADS.md` §2 |
+| Wall-run, grapple swing, hard landing, flip, vault, stumble, victory | **Mixamo ✅ retargeted** | in `public/assets/player/player_anims.glb` as `wallrun, swing, land_hard, flip, vault, stumble, victory, fall_loop, dive_roll` |
 | Female mannequin (proportion test) | UAL2 | `Female Mannequin/Unreal-Godot/Mannequin_F.glb` |
 
 ### World
@@ -82,14 +85,17 @@ Open decisions (answer when reached):
 ## 2. Asset pipeline (to build in Phase 3, prototype in Phase 1)
 
 ```
-assets-source/<vendor>/...           raw, git-ignored
-        │  tools/build-assets.(ts|sh)
+assets-source/<vendor>/...                 raw, git-ignored
+        │  tools/build-assets.mjs            (copy/convert → ship)
+        │  tools/fbx2glb.py                  (Blender: FBX-only Quaternius packs → GLB, metres)
+        │  tools/build-player-anims.py       (Blender: UAL1+UAL2+Mixamo → one armature GLB)
         ▼
-assets/<category>/<name>.glb          gltfpack/gltf-transform: draco|meshopt + KTX2
-assets/textures/<name>_{color,normal,orm}.ktx2
-assets/sky/<biome>_{1k,2k}.ktx2       HDR → RGBM/KTX2 cubemap
-assets/audio/<name>.{ogg,m4a}
-assets/manifest.json                  sizes + which bundle (boot | sky | fire | void | cosmetics)
+public/assets/proto/...                    greybox textures + Kenney GLBs (Phase 1)
+public/assets/player/player_anims.glb      ✅ 31 clips, 2.04 MB (armature only)
+public/assets/player/superhero_male.glb    TODO Phase 3 (mesh + hair, ≤ 1K textures, KTX2)
+public/assets/<biome>/...                  TODO Phase 3+: meshopt + KTX2 via gltf-transform
+public/assets/sky/<biome>_{1k,2k}.*        TODO HDR → cubemap
+public/assets/manifest.json                TODO sizes + bundle membership (boot | sky | fire | void | cosmetics)
 ```
 
 Tools:
@@ -105,22 +111,22 @@ Budget gate (CI fails if exceeded): **boot bundle ≤ 20 MB**, any single GLB �
 
 ## 3. Phases with concrete exit criteria
 
-### Phase 0 — Repo bootstrap  (next)
-- [ ] Install Blender 4.x (`brew install --cask blender`) — FBX→GLB + animation work depend on it
-- [ ] `npm create vite@latest` (vanilla-ts) → add `playcanvas`, `@gltf-transform/cli`, `gltfpack`
-- [ ] Folder layout from the vision doc (`src/core, player, world, progression, graphics, ui, audio, crazygames`)
-- [ ] `index.html` with fullscreen canvas, `Device.ts` (touch? GPU tier? WebGPU available?)
-- [ ] GitHub repo + `.github/workflows/deploy.yml` → GitHub Pages
-- [ ] `tools/fetch-assets.sh` ✅ (done) · `tools/build-assets` stub that copies 3 prototype GLBs into `assets/`
-- **Exit:** empty PlayCanvas scene with a spinning Kenney cube deployed to a Pages URL.
+### Phase 0 — Repo bootstrap  ✅
+- [x] Install Blender (5.4 alpha at `/Applications/Blender.app`)
+- [x] Vite 7 + TypeScript 5.9 + `playcanvas` 2.23.3 (`@gltf-transform/cli` / `gltfpack` deferred to Phase 3)
+- [x] Folder layout (`src/core, player, world, graphics, ui`; `progression/audio/crazygames` created when first used)
+- [x] `index.html` fullscreen canvas + HUD + touch layer; `Device.ts` (touch / profile / WebGPU)
+- [x] `.github/workflows/deploy.yml` → GitHub Pages (needs the remote repo + Pages enabled)
+- [x] `tools/fetch-assets.sh`, `tools/build-assets.mjs`
+- [ ] Push to GitHub, confirm the Pages URL loads — **needs you to create the repo**
 
-### Phase 1 — Movement prototype (grey)
-- [ ] Kinematic capsule controller: run (accel/decel curves), coyote time, jump buffer, variable jump height
-- [ ] Dash (ground + air, 1 charge), camera follow with speed-FOV
-- [ ] Greybox test course from Prototype Kit: 5 islands, gaps tuned to jump/dash ranges
-- [ ] Mobile: virtual joystick + Jump/Dash buttons, auto-vault on low obstacles
-- [ ] Debug overlay: speed, state, FPS, draw calls
-- **Exit:** 60 s of running/jumping/dashing on grey boxes feels good on desktop *and* a phone. Decide O1.
+### Phase 1 — Movement prototype (grey)  ✅ code / ⏳ feel pass
+- [x] Kinematic capsule controller: accel/decel, coyote time, jump buffer, variable jump height
+- [x] Dash (ground + air, 1 charge refilled on landing), camera follow with speed-FOV + dash pulse + boom collision
+- [x] Greybox course: 7 islands, hop / step-up / dash gap / canyon with wall-run walls / goal flag, checkpoints
+- [x] Mobile: virtual joystick + Jump/Dash/Grapple buttons, right-half drag look (auto-vault lands with vault in Phase 2)
+- [x] Debug overlay (backquote): fps, draw calls, state, velocity, checkpoint
+- [ ] **Exit:** 60 s of running/jumping/dashing feels good on desktop *and* a phone — waiting on a human play-test
 
 ### Phase 2 — Movement vertical slice
 - [ ] Wall-run (surface tagging, stick/detach rules, wall-jump)
@@ -165,8 +171,7 @@ Budget gate (CI fails if exceeded): **boot bundle ≤ 20 MB**, any single GLB �
 
 ## 4. Immediate next actions (ordered)
 
-1. ~~Download P0 Quaternius Drive packs~~ ✅ all 11 on disk.
-2. **You:** rotate the password pasted in chat; install Blender when convenient.
-3. **Me:** Phase 0 bootstrap (Vite + PlayCanvas + Pages workflow) — nothing blocks it.
-4. Phase 1 controller on Kenney Prototype Kit greybox.
-5. Mixamo clips (upload `assets-source/mixamo/upload/Superhero_Male_mesh.zip`, or use Y Bot) only when Phase 3 starts — or skip for MVP per D4/D5.
+1. **You:** play the greybox (`npm run dev`) and report feel notes; create the GitHub repo + push `main` for a Pages URL.
+2. **Me:** Phase 2 — wall-run on the tagged canyon walls, grapple, slide/vault, FLOW, chunk system, portal + upgrade cards.
+3. Pull the Superhero mesh + `player_anims.glb` into the game with an anim state graph (early Phase 3) so Phase 2 moves can be previewed with real animation.
+4. `tools/fbx2glb.py` full run on Ruins / Stylized Nature when Phase 3 dressing starts (6 files validated, ~1 s each).

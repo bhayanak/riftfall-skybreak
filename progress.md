@@ -15,16 +15,17 @@ Newest entries at the top of each section. Update this file at the end of every 
 | Assets — Quaternius Google Drive | ✅ 11/11 packs (~1.85 GB) — downloaded manually by Ajay off-network |
 | Assets — Poly Haven HDRIs | ✅ 12/12 files (54 MB) |
 | Assets — ambientCG materials | ✅ 26/26 sets @1K-JPG (190 MB) |
-| Assets — Mixamo | ⏳ upload fix ready (`assets-source/mixamo/upload/*.zip`); clips still to download — not needed for MVP (D3–D5) |
-| Phase 0 — repo bootstrap | ⬜ not started |
-| Phase 1 — movement prototype | ⬜ |
-| Phase 2 — movement slice | ⬜ |
-| Phase 3 — visual slice | ⬜ |
+| Assets — Mixamo | ✅ 9 clips downloaded (auto-rigged on our mesh) → retargeted into `player_anims.glb` |
+| Asset pipeline tooling | ✅ `tools/fetch-assets.sh`, `tools/build-assets.mjs`, `tools/fbx2glb.py`, `tools/build-player-anims.py`, `tools/preview-anims.py`, `tools/export-mixamo-mesh.py`, `tools/inspect-fbx.py` |
+| Phase 0 — repo bootstrap | ✅ Vite 7 + TS 5.9 + PlayCanvas 2.23 (`AppBase`, WebGL2), Pages workflow, local git repo (2 commits, no remote yet) |
+| Phase 1 — movement prototype | ✅ run / jump (coyote, buffer, variable height) / dash (ground+air, 1 charge) / camera / greybox course / touch controls / debug overlay — **feel pass with a human still pending** |
+| Phase 2 — movement slice | ⬜ next: wall-run, grapple, slide/vault, FLOW, chunks, portal/upgrades |
+| Phase 3 — visual slice | ⬜ `player_anims.glb` (31 clips) already built — character swap-in is unblocked |
 | Phase 4 — procedural runs | ⬜ |
 | Phase 5 — content | ⬜ |
 | Phase 6 — web optimisation / CrazyGames | ⬜ |
 
-Raw asset footprint on disk: **~3 GB** in `assets-source/` (git-ignored).
+Raw asset footprint on disk: **~3 GB** in `assets-source/` (git-ignored). Shipped so far: `public/assets/` = **2.1 MB** (2.04 MB is the animation bundle; engine is 311 KB gzip).
 
 ---
 
@@ -67,14 +68,36 @@ Void: `satara_night` (2k+1k), `moonless_golf`, `rogland_moonlit_night`
 Rock: `030 035 051 058 063 064` · Ground: `037 054 068 080` · Grass: `004 005` · `Moss002` ·
 Bricks: `085 097` · `PavingStones138` · `Tiles143` · Lava: `001 002 004 005` · Ice: `002 003` · `Onyx006` · Metal: `032 049A`
 
-### Mixamo — ⏳ upload unblocked, clips pending
-- First attempt failed: uploading `Superhero_Male_FullBody.fbx` → "unable to map your existing skeleton" (it carries the UE-mannequin rig, which Mixamo can't ingest).
-- Fix: `tools/export-mixamo-mesh.py` strips the skin and writes OBJ+MTL+textures zips → `assets-source/mixamo/upload/Superhero_{Male,Female}_mesh.zip` (T-pose, 1.82 m, 8.5k verts). Upload the zip, auto-rig, then download clips. Fallback: use Mixamo's Y Bot (retarget happens in Blender regardless).
-- Not required for MVP (D3–D5). Clip shopping list in `assets-source/MANUAL-DOWNLOADS.md` §2.
+### Mixamo — ✅ done
+- Upload: `Superhero_Male_mesh.zip` (mesh-only OBJ from `tools/export-mixamo-mesh.py`) auto-rigged fine on the 25-bone LOD.
+- Clips on disk (`assets-source/mixamo/upload/animations/`, all In-Place, 30 fps): Falling Idle 0.7 s · Front Flip 1.67 s · Hard Landing 2.5 s · Jump Over 2.27 s · Running Dive Roll 2.07 s · Stumble Backwards 3.33 s · Swinging 1.97 s · Victory 4.5 s · Wall Run 0.93 s, plus the rigged mesh (with/without skin).
+- Retargeted onto the Quaternius Universal rig by `tools/build-player-anims.py` (rest-pose delta method, hips XZ zeroed). Mid-clip end-effector error vs source ≤ 0.11 (normalised by height) on every clip; contact sheet looked right.
+
+### Generated: `public/assets/player/player_anims.glb` — 2.04 MB, 31 clips, armature only (mesh is loaded separately)
+| Source | Clips |
+|---|---|
+| UAL1 | idle, walk, jog, sprint, jump_start, jump_loop, jump_land, roll, crouch_idle, crouch_fwd, dance, death, hit |
+| UAL2 | slide_start, slide_loop, slide_exit, climb_up, dash (Shield_Dash), knockback, djump_start, djump_loop, djump_land |
+| Mixamo | fall_loop, flip, land_hard, vault, dive_roll, stumble, swing, victory, wallrun |
+
+Rebuild: `/Applications/Blender.app/Contents/MacOS/Blender -b -P tools/build-player-anims.py -- --check`
 
 ---
 
 ## Session log
+
+### 2026-10-18 (evening) — Phase 0 + Phase 1 implemented, animation bundle built
+- **Mixamo clips verified** with headless Blender (`tools/inspect-fbx.py`): 9 clips, Mixamo 25-bone rig, all in place. Blender 5.4 alpha installed; note its layered-action API (`action.layers[].strips[].channelbags[].fcurves`, action slots).
+- **Phase 0**: `package.json` (Vite 7, TS 5.9, PlayCanvas 2.23.3), `tsconfig.json`, `vite.config.ts` (`VITE_BASE` for Pages), `index.html` (HUD + touch layer + debug `<pre>`), `.github/workflows/deploy.yml`, `tools/build-assets.mjs` (copies Kenney proto textures/GLBs to `public/assets/proto`). Decision: `public/assets/` is the shipped asset root (Vite static), not a top-level `assets/`.
+- **Phase 1**:
+  - `src/world/Colliders.ts` — OBB colliders, 3-sphere capsule resolution (iterative), tag system (ground/wall/hazard/checkpoint), slab raycast.
+  - `src/player/Movement.ts` — kinematic controller: accel/decel curves, gravity 30, jump 10.5 (≈1.84 m), coyote 0.12 s, buffer 0.14 s, variable height (cut ×0.45), dash 24 m/s × 0.17 s with 1 charge refilled on landing, substepping, ground probe, facing lerp, event list (`jump/dash/land/land-hard/fell/respawn`). All tuning in `TUNING`. **Decides O1 = custom kinematic (no Ammo).**
+  - `src/graphics/CameraRig.ts` — orbit follow, boom raycast collision, speed FOV (72→88), dash pulse, landing kick (reduced on mobile).
+  - `src/world/Greybox.ts` — 7-island course along -Z: start (pillar + low step), 4.5 m hop, two step-ups, 6.7 m dash gap, canyon beam with orange wall-run walls, goal island + Kenney flag. Checkpoint triggers per island. Decorative void rocks.
+  - `src/core/Input.ts` (keyboard/pointer-lock mouse/touch-look), `src/ui/TouchControls.ts` (joystick + Jump/Dash/Grapple), `src/ui/Hud.ts`, `src/core/Device.ts` (profile heuristics), `src/core/Game.ts` (AppBase with explicit systems/handlers, WebGL2; `?gpu` opts into WebGPU).
+  - **Verified in a headless browser** via scripted key events: run 9 m/s, hop lands on island 1, jump+air-dash clears the 6.7 m gap, pillar push-out works (wall contact flagged), 120 fps / 0 errors; touch layout at 844×390 checked by screenshot. One early "phantom jump" sighting was test-harness state, not reproducible across 5 instrumented runs.
+- **Pipeline**: `tools/fbx2glb.py` validated on 6 Ruins FBX (metres, 100 KB each; textures not embedded because that pack is vertex-colour/material only). `tools/build-player-anims.py` built `player_anims.glb` (31 clips). `tools/preview-anims.py` renders contact sheets for eyeballing.
+- Local git repo initialised on `main`, 2 commits. **No remote / nothing pushed.**
 
 ### 2026-10-18 (later) — Drive packs landed, Mixamo unblocked
 - Ajay downloaded all 11 Google-Drive Quaternius packs off-network and placed them under `assets-source/quaternius/<name>/`. Verified: no stray zips, all extracted (~1.85 GB). Six of them are FBX/.blend only → added FBX→GLB step to the pipeline plan.
@@ -97,11 +120,10 @@ Bricks: `085 097` · `PavingStones138` · `Tiles143` · Lava: `001 002 004 005` 
 ---
 
 ## Blockers / needs from you
-1. ~~Google Drive blocked~~ — resolved, all 11 packs on disk.
-2. **Rotate the Gmail/Adobe password** that was pasted into chat.
-3. Mixamo: upload `assets-source/mixamo/upload/Superhero_Male_mesh.zip` (not the FBX) when you next try — or just use Y Bot. Only needed by Phase 3/5.
-4. Install **Blender** (free, https://www.blender.org/download/) before Phase 3 — needed for FBX→GLB on the six FBX-only packs and for the animation merge/retarget.
-5. Choose music source (O2) by Phase 3.
+1. **Play it.** `npm run dev` → http://localhost:5173 → click to capture mouse, WASD / Space / Shift, R restart, ` (backquote) debug overlay. The numbers are right; whether it *feels* right is the Phase 1 exit criterion and needs a human. Tell me what's off (too floaty? dash too short? camera too loose?) — everything lives in `TUNING` / `CAM`.
+2. **Create the GitHub repo and push** when you want a public test URL (the Pages workflow is ready; it expects branch `main`). Enable Pages → Source: GitHub Actions.
+3. ~~Rotate the password pasted in chat~~ — still recommended if not done.
+4. Choose music source (O2) by Phase 3.
 
 ## Next up
-Phase 0 — repo bootstrap (Vite + TypeScript + PlayCanvas engine + GitHub Pages workflow). Nothing blocks it.
+Phase 2 — wall-run (walls are already tagged + placed in the canyon), grapple, slide/vault, FLOW meter, `Chunk.ts` + `WorldGenerator.ts`, portal + upgrade cards. Optionally pull the Superhero mesh + `player_anims.glb` in early (Phase 3 item) since the bundle exists.
