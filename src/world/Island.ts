@@ -27,21 +27,30 @@ export interface Island {
 const PLATFORM_MODELS: { key: WorldModel; w: number; h: number; d: number }[] = [
   { key: 'rock_platform_large', w: 7.38, h: 3.63, d: 5.16 },
   { key: 'rock_platform_medium', w: 4.81, h: 2.91, d: 4.81 },
-  { key: 'rock_platforms_1', w: 7.0, h: 3.3, d: 6.0 },
 ];
 const TREES: WorldModel[] = ['tree', 'tree_fruit', 'pine_1', 'pine_3', 'common_tree_2', 'twisted_tree_1'];
 const SMALL: WorldModel[] = ['bush', 'grass_1', 'grass_2', 'rock_1', 'rock_2', 'grass_1', 'grass_2'];
 const RUINS: WorldModel[] = ['ruin_column_round', 'ruin_column_short', 'ruin_wall_broken', 'ruin_wall_overgrown', 'ruin_arch_round', 'ruin_statue_stag', 'ruin_wall_arch_broken'];
+/** Collision footprint (w, h, d at scale 1) for props that should be solid. Grass is walk-through. */
+const PROP_BOX: Partial<Record<WorldModel, [number, number, number]>> = {
+  tree: [1.1, 8.6, 1.1], tree_fruit: [1.1, 8.6, 1.1], pine_1: [1.0, 7.0, 1.0], pine_3: [1.0, 7.0, 1.0],
+  common_tree_2: [1.0, 7.5, 1.0], twisted_tree_1: [1.2, 7.5, 1.2], dead_tree_2: [0.9, 6.5, 0.9],
+  bush: [2.4, 2.0, 2.4], rock_1: [1.5, 0.9, 1.4], rock_2: [1.8, 1.2, 1.6],
+  ruin_column_round: [0.7, 4.0, 0.7], ruin_column_short: [0.7, 2.0, 0.7], ruin_wall_broken: [2.0, 2.5, 0.5],
+  ruin_wall_overgrown: [2.0, 3.0, 0.5], ruin_arch_round: [3.1, 3.5, 0.5], ruin_statue_stag: [1.2, 2.4, 1.2],
+  ruin_wall_arch_broken: [2.0, 3.0, 0.5], ruin_torch: [0.3, 1.6, 0.3],
+};
+/** Half-width of the centre lane that stays free of solid decoration. */
+const LANE = 1.6;
 
 /**
- * Builds floating islands from the Quaternius kit: a flat walkable slab (collider = slab),
- * kit rock-platform meshes scaled to hang underneath, and biome-tinted decoration on top.
+ * Builds floating islands from the Quaternius kit: the kit "floating platform" mesh (grass top, tapered rock
+ * underside) scaled so its top is the walkable surface; the collider is an exact box under that top.
+ * Decoration is solid (prop colliders) and never placed on the centre running lane.
  */
 export class IslandBuilder {
   readonly root = new pc.Entity('world');
   readonly islands: Island[] = [];
-  private slabMat!: pc.StandardMaterial;
-  private sideMat!: pc.StandardMaterial;
   private wallMat!: pc.StandardMaterial;
   private tintCache = new Map<string, pc.Material>();
   private biomeTint: pc.Color | null = null;
@@ -51,8 +60,6 @@ export class IslandBuilder {
   }
 
   setBiome(b: Biome): void {
-    this.slabMat = flat(b.grass, 0.15);
-    this.sideMat = flat(b.stone, 0.1);
     this.wallMat = flat(b.stone.clone().mulScalar(0.9), 0.2);
     this.tintCache.clear();
     // the kit is authored for a sunny sky; other biomes pull vegetation/rock toward the biome palette
@@ -71,47 +78,34 @@ export class IslandBuilder {
     this.root.addChild(root);
     const colliders: BoxCollider[] = [];
 
-    // walkable slab (visual slightly inset, collider exact)
-    const slabH = 0.9;
-    const slab = new pc.Entity('slab');
-    slab.addComponent('render', { type: 'box', material: this.slabMat });
-    slab.render!.receiveShadows = true; slab.render!.castShadows = true;
-    slab.setLocalScale(s.w, slabH, s.d);
-    slab.setLocalPosition(0, -slabH * 0.5, 0);
-    root.addChild(slab);
+    // walkable collider: thick box whose top is the island top
+    const slabH = 1.2;
     colliders.push(this.world.add(new BoxCollider(new pc.Vec3(s.x, s.top - slabH * 0.5, s.z), new pc.Vec3(s.w, slabH, s.d))));
 
-    // stone rim under the grass (slab sides read as earth)
-    const rim = new pc.Entity('rim');
-    rim.addComponent('render', { type: 'box', material: this.sideMat });
-    rim.render!.castShadows = true;
-    rim.setLocalScale(s.w * 0.94, 1.1, s.d * 0.94);
-    rim.setLocalPosition(0, -slabH - 0.5, 0);
-    root.addChild(rim);
-
-    // rock bodies: kit floating-platform meshes (grass top, tapered rock underside) scaled so their top
-    // sits flush with the slab. The slab stays as the exact walkable surface.
-    const area = s.w * s.d;
-    const n = area < 12 ? 1 : area < 40 ? 2 : area < 120 ? 3 : 4;
-    for (let i = 0; i < n; i++) {
-      const m = PLATFORM_MODELS[this.rng.int(PLATFORM_MODELS.length)];
-      const e = this.assets.spawn(m.key);
-      const f = n === 1 ? 1.08 : 0.7;
-      const sx = (s.w * f) / m.w, sz = (s.d * f) / m.d;
-      const sy = pc.math.clamp(Math.min(s.w, s.d) * 0.5, 2, 7) / m.h;
-      const ox = n === 1 ? 0 : (this.rng.float() - 0.5) * s.w * 0.4;
-      const oz = n === 1 ? 0 : (this.rng.float() - 0.5) * s.d * 0.4;
-      e.setLocalScale(sx, sy, sz);
-      e.setLocalEulerAngles(0, this.rng.int(4) * 90, 0);
-      e.setLocalPosition(ox, -m.h * sy - 0.15 + (n === 1 ? 0 : -this.rng.float() * 0.6), oz);
-      if (this.biomeTint) this.tint(e, this.biomeTint);
-      root.addChild(e);
+    // body: one kit platform stretched to the footprint, top flush with the collider; big islands get a
+    // second, lower platform underneath for mass
+    const m = s.w * s.d > 30 ? PLATFORM_MODELS[0] : PLATFORM_MODELS[1];
+    const body = this.assets.spawn(m.key);
+    const sy = pc.math.clamp(Math.min(s.w, s.d) * 0.55, 2.2, 7) / m.h;
+    body.setLocalScale((s.w * 1.02) / m.w, sy, (s.d * 1.02) / m.d);
+    body.setLocalEulerAngles(0, this.rng.int(4) * 90, 0);
+    body.setLocalPosition(0, -m.h * sy, 0);
+    if (this.biomeTint) this.tint(body, this.biomeTint);
+    root.addChild(body);
+    if (s.w * s.d > 60) {
+      const under = this.assets.spawn(PLATFORM_MODELS[1].key);
+      const us = Math.min(s.w, s.d) * 0.6 / PLATFORM_MODELS[1].w;
+      under.setLocalScale(us, us * 1.4, us);
+      under.setLocalEulerAngles(0, this.rng.float() * 360, 0);
+      under.setLocalPosition((this.rng.float() - 0.5) * s.w * 0.3, -m.h * sy - PLATFORM_MODELS[1].h * us * 1.4 * 0.75, (this.rng.float() - 0.5) * s.d * 0.3);
+      if (this.biomeTint) this.tint(under, this.biomeTint);
+      root.addChild(under);
     }
 
     // decoration
     const density = s.decor ?? 0.5;
-    if (density > 0) this.decorate(root, s, density);
-    if (s.ruins) this.ruins(root, s);
+    if (density > 0) this.decorate(root, s, density, colliders);
+    if (s.ruins) this.ruins(root, s, colliders);
 
     const isl: Island = { root, colliders, x: s.x, z: s.z, top: s.top, falling: 0 };
     this.islands.push(isl);
@@ -162,13 +156,22 @@ export class IslandBuilder {
     return isl;
   }
 
-  prop(key: WorldModel, x: number, y: number, z: number, yaw = 0, scale = 1): pc.Entity {
+  prop(key: WorldModel, x: number, y: number, z: number, yaw = 0, scale = 1, solid = true): pc.Entity {
     const e = this.assets.spawn(key);
     e.setPosition(x, y, z);
     e.setEulerAngles(0, yaw, 0);
     e.setLocalScale(scale, scale, scale);
     this.root.addChild(e);
+    if (solid) this.propCollider(key, x, y, z, yaw, scale);
     return e;
+  }
+
+  private propCollider(key: WorldModel, x: number, y: number, z: number, yaw: number, scale: number): BoxCollider | null {
+    const box = PROP_BOX[key];
+    if (!box) return null;
+    const [w, h, d] = box;
+    const rot = new pc.Quat().setFromEulerAngles(0, yaw, 0);
+    return this.world.add(new BoxCollider(new pc.Vec3(x, y + h * scale * 0.5, z), new pc.Vec3(w * scale, h * scale, d * scale), rot, 'prop'));
   }
 
   /** Advance "falling" islands taken by the Rift. */
@@ -204,39 +207,51 @@ export class IslandBuilder {
   }
 
   // ------------------------------------------------------------------------------------------
-  private decorate(root: pc.Entity, s: IslandSpec, density: number): void {
-    const margin = 0.9;
+  private decorate(root: pc.Entity, s: IslandSpec, density: number, colliders: BoxCollider[]): void {
+    const margin = 0.8;
     const area = s.w * s.d;
-    const nTrees = Math.round(area / 45 * density);
+    const nTrees = Math.round(area / 40 * density);
     const nSmall = Math.round(area / 9 * density);
+    const halfW = s.w / 2 - margin, halfD = s.d / 2 - margin;
+    // islands narrower than lane + margins get no solid decoration at all
+    const canSolid = halfW > LANE + 0.6;
     const place = (key: WorldModel, scale: number, edgeBias: boolean) => {
-      for (let tries = 0; tries < 6; tries++) {
-        let lx = (this.rng.float() - 0.5) * (s.w - margin * 2);
-        let lz = (this.rng.float() - 0.5) * (s.d - margin * 2);
-        if (edgeBias) { lx = Math.sign(lx || 1) * Math.max(Math.abs(lx), s.w * 0.28); }
-        if (s.lane && Math.abs(lx) < 1.6) continue;
+      const solid = !!PROP_BOX[key];
+      if (solid && !canSolid) return;
+      for (let tries = 0; tries < 8; tries++) {
+        let lx = (this.rng.float() - 0.5) * 2 * halfW;
+        const lz = (this.rng.float() - 0.5) * 2 * halfD;
+        if (edgeBias) lx = Math.sign(lx || 1) * Math.max(Math.abs(lx), halfW * 0.6);
+        if (solid && Math.abs(lx) < LANE + (PROP_BOX[key]![0] * scale) / 2) continue;
         const e = this.assets.spawn(key);
         e.setLocalPosition(lx, 0, lz);
-        e.setLocalEulerAngles(0, this.rng.float() * 360, 0);
+        const yaw = this.rng.float() * 360;
+        e.setLocalEulerAngles(0, yaw, 0);
         e.setLocalScale(scale, scale, scale);
         if (this.biomeTint) this.tint(e, this.biomeTint);
         root.addChild(e);
+        if (solid) { const c = this.propCollider(key, s.x + lx, s.top, s.z + lz, yaw, scale); if (c) colliders.push(c); }
         return;
       }
     };
-    for (let i = 0; i < nTrees; i++) place(this.rng.pick(TREES), 0.55 + this.rng.float() * 0.5, true);
+    for (let i = 0; i < nTrees; i++) place(this.rng.pick(TREES), 0.5 + this.rng.float() * 0.4, true);
     for (let i = 0; i < nSmall; i++) place(this.rng.pick(SMALL), 0.8 + this.rng.float() * 0.6, false);
   }
 
-  private ruins(root: pc.Entity, s: IslandSpec): void {
+  private ruins(root: pc.Entity, s: IslandSpec, colliders: BoxCollider[]): void {
+    if (s.w / 2 < LANE + 1.6) return;
     const n = 1 + this.rng.int(3);
     for (let i = 0; i < n; i++) {
       const key = this.rng.pick(RUINS);
       const e = this.assets.spawn(key);
       const side = this.rng.float() < 0.5 ? -1 : 1;
-      e.setLocalPosition(side * (s.w * 0.3 + this.rng.float() * s.w * 0.12), 0, (this.rng.float() - 0.5) * (s.d - 3));
-      e.setLocalEulerAngles(0, this.rng.int(4) * 90 + (this.rng.float() - 0.5) * 20, 0);
+      const lx = side * (LANE + 1.0 + this.rng.float() * Math.max(0.2, s.w / 2 - LANE - 1.8));
+      const lz = (this.rng.float() - 0.5) * (s.d - 3);
+      const yaw = this.rng.int(4) * 90 + (this.rng.float() - 0.5) * 20;
+      e.setLocalPosition(lx, 0, lz);
+      e.setLocalEulerAngles(0, yaw, 0);
       root.addChild(e);
+      const c = this.propCollider(key, s.x + lx, s.top, s.z + lz, yaw, 1); if (c) colliders.push(c);
     }
     if (this.rng.float() < 0.5) {
       const t = this.assets.spawn('ruin_torch');

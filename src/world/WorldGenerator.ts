@@ -5,11 +5,35 @@ import { IslandBuilder, emissive, type Island } from './Island';
 import { Rng } from './Rng';
 import type { Biome } from '../graphics/Environment';
 
-export interface Anchor { pos: pc.Vec3; entity: pc.Entity; }
+function coinMaterial(): pc.StandardMaterial {
+  const m = new pc.StandardMaterial();
+  m.diffuse = new pc.Color(1.0, 0.78, 0.25);
+  m.emissive = new pc.Color(0.9, 0.6, 0.1);
+  m.emissiveIntensity = 0.9;
+  m.useMetalness = true;
+  m.metalness = 0.9;
+  m.gloss = 0.75;
+  m.update();
+  return m;
+}
+
+export interface Anchor { pos: pc.Vec3; entity: pc.Entity; ring: pc.Entity; }
 export interface Gem { pos: pc.Vec3; entity: pc.Entity; taken: boolean; }
 export interface Checkpoint { index: number; spawn: pc.Vec3; }
+/** A one-time on-screen tip that fires when the player passes z. */
+export interface HintMarker { z: number; text: string; touch: string; shown: boolean; }
 
 type ChunkName = 'hop' | 'stairs' | 'zigzag' | 'dashgap' | 'pillars' | 'descend' | 'bridge' | 'canyon' | 'canyonGap' | 'wallrun' | 'grapple';
+
+const CHUNK_HINTS: Partial<Record<ChunkName, [string, string]>> = {
+  dashgap: ['BIG GAP AHEAD — JUMP, THEN SHIFT IN THE AIR TO DASH', 'BIG GAP — JUMP, THEN TAP DASH IN THE AIR'],
+  canyon: ['WALL-RUN: JUMP TOWARDS A WALL WHILE RUNNING. SPACE AGAIN TO LEAP OFF', 'WALL-RUN: JUMP INTO A WALL WHILE MOVING. JUMP AGAIN TO LEAP OFF'],
+  canyonGap: ['NO FLOOR — WALL-RUN ALONG THE SIDE, THEN LEAP TO THE OTHER WALL', 'NO FLOOR — WALL-RUN THE SIDE, JUMP ACROSS'],
+  wallrun: ['CHAIN THE WALLS: RUN ONE, LEAP TO THE NEXT', 'CHAIN THE WALLS: RUN ONE, LEAP TO THE NEXT'],
+  grapple: ['GRAPPLE: WHEN THE RING GLOWS, PRESS E TO SWING. E AGAIN TO LET GO', 'GRAPPLE: WHEN THE RING GLOWS, TAP GRAPPLE TO SWING'],
+  pillars: ['SHORT HOPS — KEEP YOUR SPEED', 'SHORT HOPS — KEEP YOUR SPEED'],
+  descend: ['DROP DOWN — SPACE MID-AIR FOR A SECOND JUMP', 'DROP DOWN — JUMP MID-AIR FOR A SECOND JUMP'],
+};
 
 interface Cursor { x: number; y: number; z: number; }
 
@@ -22,6 +46,7 @@ export class WorldGenerator {
   readonly anchors: Anchor[] = [];
   readonly gems: Gem[] = [];
   readonly checkpoints: Checkpoint[] = [];
+  readonly hints: HintMarker[] = [];
   readonly spawn = new pc.Vec3();
   readonly portalPos = new pc.Vec3();
   portal!: pc.Entity;
@@ -29,38 +54,41 @@ export class WorldGenerator {
   private portalCore!: pc.Entity;
   private portalCollider!: BoxCollider;
   private rng = new Rng(1);
-  private gemMat!: pc.StandardMaterial;
+  private coinMat!: pc.StandardMaterial;
   private anchorMat!: pc.StandardMaterial;
-  private gemModel: 'gem_blue' | 'gem_pink' = 'gem_blue';
+  private anchorHotMat!: pc.StandardMaterial;
   private t = 0;
 
   constructor(app: pc.AppBase, private assets: Assets, world: CollisionWorld) {
     this.builder = new IslandBuilder(app, assets, world, this.rng);
   }
 
-  generate(seed: number, biome: Biome, difficulty: number, chunkCount = 11): void {
+  generate(seed: number, biome: Biome, difficulty: number, chunkCount = 11, stage = 0): void {
     this.rng = new Rng(seed);
     this.builder.rng = this.rng;
     this.builder.clear();
     this.anchors.length = 0;
     this.gems.length = 0;
     this.checkpoints.length = 0;
+    this.hints.length = 0;
     this.builder.setBiome(biome);
-    this.gemMat = emissive(biome.rift, 1.6);
-    this.anchorMat = emissive(biome.rift, 2.5);
-    this.gemModel = biome.gem;
+    this.coinMat = coinMaterial();
+    this.anchorMat = emissive(biome.rift, 1.2);
+    this.anchorHotMat = emissive(new pc.Color(1, 0.95, 0.6), 4);
 
     const cur: Cursor = { x: 0, y: 0, z: 0 };
     // start island
     this.builder.island({ x: 0, top: 0, z: 0, w: 14, d: 14, decor: 0.5, ruins: true });
-    this.builder.prop('ruin_arch_round', 0, 0, 5.5, 0, 1.4);
+    this.builder.prop('ruin_arch_round', 0, 0, 5.5, 0, 1.4, false);
     this.spawn.set(0, 0.05, 4.5);
     this.checkpoints.push({ index: 0, spawn: this.spawn.clone() });
     cur.z = -7;
 
-    const templates = this.templateOrder(chunkCount, difficulty);
+    const templates = this.templateOrder(chunkCount, difficulty, stage);
     templates.forEach((name, i) => {
       const d = difficulty + i / chunkCount;
+      const h = CHUNK_HINTS[name];
+      if (h) this.hints.push({ z: cur.z + 4, text: h[0], touch: h[1], shown: false });
       this.chunk(name, cur, d);
     });
 
@@ -76,23 +104,35 @@ export class WorldGenerator {
     this.scenery(cur.z);
   }
 
-  update(dt: number, playerPos: pc.Vec3): void {
+  update(dt: number, playerPos: pc.Vec3, targetAnchor: Anchor | null = null): void {
+    if (!this.portalRing) return;   // nothing generated yet
     this.t += dt;
     this.builder.update(dt);
-    const spin = this.t * 90;
+    const spin = this.t * 120;
     for (const g of this.gems) {
       if (g.taken) continue;
       g.entity.setEulerAngles(0, spin + g.pos.x * 40, 0);
-      g.entity.setPosition(g.pos.x, g.pos.y + Math.sin(this.t * 2.5 + g.pos.z) * 0.15, g.pos.z);
+      g.entity.setPosition(g.pos.x, g.pos.y + Math.sin(this.t * 2.5 + g.pos.z) * 0.12, g.pos.z);
     }
     for (const a of this.anchors) {
-      a.entity.setEulerAngles(this.t * 40, this.t * 70, 0);
+      const hot = a === targetAnchor;
+      a.entity.setEulerAngles(0, this.t * 60, 0);
+      const s = hot ? 2.0 + Math.sin(this.t * 10) * 0.25 : 1.6;
+      a.ring.setLocalScale(s, s, s);
+      const mat = hot ? this.anchorHotMat : this.anchorMat;
+      if (a.ring.render!.material !== mat) a.ring.render!.material = mat;
     }
     this.portalRing.setEulerAngles(90, 0, this.t * 25);
     this.portalCore.setEulerAngles(90, 0, -this.t * 60);
     const d = Math.max(0, 1 - playerPos.distance(this.portalPos) / 40);
     const s = 1 + Math.sin(this.t * 4) * 0.03 + d * 0.15;
     this.portalCore.setLocalScale(3.2 * s, 0.1, 3.2 * s);
+  }
+
+  /** Next unshown hint the player has reached, if any. */
+  popHint(playerZ: number): HintMarker | null {
+    for (const h of this.hints) if (!h.shown && playerZ < h.z) { h.shown = true; return h; }
+    return null;
   }
 
   /** Gems within radius of pos; marks them taken and hides them. */
@@ -171,7 +211,12 @@ export class WorldGenerator {
     }
   }
 
-  private templateOrder(n: number, difficulty: number): ChunkName[] {
+  private templateOrder(n: number, difficulty: number, stage: number): ChunkName[] {
+    // first run teaches one mechanic at a time, in a fixed order
+    if (stage === 0) {
+      const teach: ChunkName[] = ['hop', 'zigzag', 'dashgap', 'bridge', 'canyon', 'stairs', 'grapple', 'pillars', 'descend', 'dashgap', 'canyon', 'grapple'];
+      return teach.slice(0, n);
+    }
     const easy: ChunkName[] = ['hop', 'stairs', 'zigzag', 'bridge', 'pillars'];
     const mid: ChunkName[] = ['dashgap', 'canyon', 'grapple', 'descend'];
     const hard: ChunkName[] = ['wallrun', 'grapple', 'dashgap', 'canyonGap'];
@@ -184,9 +229,6 @@ export class WorldGenerator {
       while (pick === last && guard++ < 5) pick = this.rng.pick(pool);
       out.push(pick); last = pick;
     }
-    // teach dash and grapple before they're required
-    if (!out.slice(0, 5).includes('dashgap')) out[3] = 'dashgap';
-    if (!out.slice(0, 7).includes('grapple')) out[5] = 'grapple';
     return out;
   }
 
@@ -205,24 +247,30 @@ export class WorldGenerator {
   }
 
   private gem(x: number, y: number, z: number): void {
-    const e = this.assets.spawn(this.gemModel);
-    e.setLocalScale(0.5, 0.5, 0.5);
-    for (const r of e.findComponents('render') as pc.RenderComponent[]) for (const mi of r.meshInstances) mi.material = this.gemMat;
+    const e = this.assets.spawn('coin');
+    e.setLocalScale(0.42, 0.42, 0.42);
+    for (const r of e.findComponents('render') as pc.RenderComponent[]) for (const mi of r.meshInstances) mi.material = this.coinMat;
     this.builder.root.addChild(e);
     this.gems.push({ pos: new pc.Vec3(x, y, z), entity: e, taken: false });
   }
 
   private anchor(x: number, y: number, z: number): void {
     const e = new pc.Entity('anchor');
-    e.addComponent('render', { type: 'torus', material: this.anchorMat });
-    e.setLocalScale(1.6, 1.6, 1.6);
-    e.setPosition(x, y, z);
+    const ring = new pc.Entity('ring');
+    ring.addComponent('render', { type: 'torus', material: this.anchorMat });
+    ring.setLocalScale(1.6, 1.6, 1.6);
+    ring.setLocalEulerAngles(90, 0, 0);
+    e.addChild(ring);
     const core = new pc.Entity('core');
     core.addComponent('render', { type: 'sphere', material: emissive(new pc.Color(1, 1, 1), 3) });
     core.setLocalScale(0.35, 0.35, 0.35);
     e.addChild(core);
+    const glow = new pc.Entity('glow');
+    glow.addComponent('light', { type: 'point', color: new pc.Color(1, 0.9, 0.6), intensity: 1.5, range: 8, castShadows: false });
+    e.addChild(glow);
+    e.setPosition(x, y, z);
     this.builder.root.addChild(e);
-    this.anchors.push({ pos: new pc.Vec3(x, y, z), entity: e });
+    this.anchors.push({ pos: new pc.Vec3(x, y, z), entity: e, ring });
   }
 
   /** island helper: centre at cursor, advance cursor past it, drop a checkpoint on it */
@@ -234,57 +282,57 @@ export class WorldGenerator {
   }
 
   protected hop(cur: Cursor, d: number): void {
-    const g = 4 + Math.min(2.5, d * 1.2);
+    const g = 3.5 + Math.min(2.5, d * 1.0);
     this.gemsLine(cur.x, cur.y, cur.z, cur.x, cur.y, cur.z - g, 3, 1.2);
     this.gap(cur, g);
-    this.isl(cur, 7 + this.rng.int(3), 7, { ruins: this.rng.chance(0.4) });
+    this.isl(cur, 8 + this.rng.int(3), 8, { ruins: this.rng.chance(0.4) });
   }
 
   protected stairs(cur: Cursor, d: number): void {
     const steps = 2 + this.rng.int(2);
     for (let i = 0; i < steps; i++) {
-      const dx = (this.rng.chance(0.5) ? -1 : 1) * (2.5 + this.rng.float() * 1.5);
-      const g = 3.5 + Math.min(1.5, d);
-      this.gemsLine(cur.x, cur.y, cur.z, cur.x + dx, cur.y + 1.6, cur.z - g, 2, 0.8);
-      cur.x += dx; cur.y += 1.6; this.gap(cur, g);
-      this.isl(cur, 6, 6, { decor: 0.35 });
+      const dx = (this.rng.chance(0.5) ? -1 : 1) * (2 + this.rng.float() * 1.2);
+      const g = 3 + Math.min(1.5, d);
+      this.gemsLine(cur.x, cur.y, cur.z, cur.x + dx, cur.y + 1.4, cur.z - g, 2, 0.8);
+      cur.x += dx; cur.y += 1.4; this.gap(cur, g);
+      this.isl(cur, 7, 6, { decor: 0.35 });
     }
   }
 
   protected zigzag(cur: Cursor, d: number): void {
-    const g = 4 + Math.min(2, d);
+    const g = 3.5 + Math.min(2, d);
     for (let i = 0; i < 3; i++) {
-      const dx = (i % 2 === 0 ? -1 : 1) * 5;
+      const dx = (i % 2 === 0 ? -1 : 1) * 4;
       this.gemsLine(cur.x, cur.y, cur.z, cur.x + dx, cur.y, cur.z - g, 2, 1);
       cur.x += dx; this.gap(cur, g);
-      this.isl(cur, 5, 5, { decor: 0.3 });
+      this.isl(cur, 6, 6, { decor: 0.3 });
     }
     cur.x = 0;
   }
 
   protected dashgap(cur: Cursor, d: number): void {
-    const g = 7 + Math.min(3, d * 1.5);
+    const g = 6.5 + Math.min(3, d * 1.5);
     this.gemsLine(cur.x, cur.y, cur.z, cur.x, cur.y, cur.z - g, 4, 1.5);
     this.gap(cur, g);
-    this.isl(cur, 8, 8, { ruins: true });
+    this.isl(cur, 9, 8, { ruins: true });
   }
 
   protected pillars(cur: Cursor, d: number): void {
     const n = 4;
-    const g = 3.2 + Math.min(1.5, d);
+    const g = 2.8 + Math.min(1.5, d);
     for (let i = 0; i < n; i++) {
       this.gap(cur, g);
-      const dx = (this.rng.float() - 0.5) * 3;
+      const dx = (this.rng.float() - 0.5) * 2.5;
       cur.x += dx;
-      const z = cur.z - 1.2;
-      this.builder.island({ x: cur.x, top: cur.y, z, w: 2.4, d: 2.4, decor: 0.2 });
+      const z = cur.z - 1.4;
+      this.builder.island({ x: cur.x, top: cur.y, z, w: 2.8, d: 2.8, decor: 0 });
       if (i % 2 === 1) this.gem(cur.x, cur.y + 1.1, z);
-      cur.z -= 2.4;
+      cur.z -= 2.8;
     }
-    this.addCheckpoint(cur.x, cur.y, cur.z + 1.2);
+    this.addCheckpoint(cur.x, cur.y, cur.z + 1.4);
     cur.x = 0;
-    this.gap(cur, 3.5);
-    this.isl(cur, 7, 6);
+    this.gap(cur, 3.2);
+    this.isl(cur, 8, 6);
   }
 
   protected descend(cur: Cursor, _d: number): void {

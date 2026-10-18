@@ -12,25 +12,27 @@ export const TUNING = {
   runSpeed: 9.5,
   groundAccel: 48,
   groundDecel: 60,
-  airAccel: 24,
-  airDrag: 0.4,
-  gravity: 30,
+  airAccel: 30,
+  airDrag: 0.3,
+  gravity: 28,
   maxFall: 45,
-  jumpVelocity: 10.8,
-  jumpCutMultiplier: 0.45,
-  coyoteTime: 0.12,
-  jumpBuffer: 0.14,
-  dashSpeed: 25,
-  dashDuration: 0.17,
-  dashCooldown: 0.3,
-  dashEndSpeedKeep: 0.6,
+  jumpVelocity: 11.2,
+  jumpCutMultiplier: 0.5,
+  coyoteTime: 0.15,
+  jumpBuffer: 0.16,
+  dashSpeed: 19,
+  dashDuration: 0.26,
+  dashCooldown: 0.25,
+  dashEndSpeedKeep: 0.7,
+  dashSteer: 6,           // rad/s the dash direction can be bent toward the stick
   // wall-run
-  wallRunMinSpeed: 5,
-  wallRunTime: 1.5,
-  wallRunGravity: 0.22,
+  wallRunMinSpeed: 4,
+  wallRunTime: 1.6,
+  wallRunGravity: 0.18,
   wallRunKick: 2.5,
   wallJumpOut: 7.5,
-  wallJumpUp: 9.5,
+  wallJumpUp: 10,
+  wallSnapDist: 1.1,      // how far a wall can be and still catch you
   // slide
   slideTime: 0.75,
   slideBoost: 1.25,
@@ -38,8 +40,8 @@ export const TUNING = {
   // vault
   vaultMaxHeight: 1.35,
   // grapple
-  grappleRange: 20,
-  grappleSwingTime: 1.5,
+  grappleRange: 22,
+  grappleSwingTime: 1.6,
   grapplePull: 14,
   grappleReleaseBoost: 1.12,
   killY: -32,
@@ -59,10 +61,13 @@ export interface RunStats {
   magnetRadius: number;
   flowDecayMult: number;
   riftShield: number;
+  /** multiplier on Rift speed (< 1 = slower Rift) */
+  riftSlow: number;
 }
 export const defaultStats = (): RunStats => ({
-  airJumps: 0, dashCharges: 1, grappleRange: TUNING.grappleRange, speedMult: 1, wallRunTime: TUNING.wallRunTime,
-  coyoteBonus: 0, jumpMult: 1, grappleBoost: 1, dashResetOnTrick: false, magnetRadius: 1.6, flowDecayMult: 1, riftShield: 0,
+  airJumps: 1, dashCharges: 1, grappleRange: TUNING.grappleRange, speedMult: 1, wallRunTime: TUNING.wallRunTime,
+  coyoteBonus: 0, jumpMult: 1, grappleBoost: 1, dashResetOnTrick: false, magnetRadius: 1.8, flowDecayMult: 1, riftShield: 0,
+  riftSlow: 1,
 });
 
 export type MoveEvent =
@@ -165,6 +170,8 @@ export class Movement {
       this.state = 'dash';
       this.dashTimer = T.dashDuration;
       this.dashChargesLeft--;
+      // a dash out of a fall gives a little lift so it reads as a recovery, not a dive
+      if (!this.grounded && this.velocity.y < 0) this.velocity.y = 2.5;
       this.events.push('dash');
     }
 
@@ -179,11 +186,19 @@ export class Movement {
     // --- state integration --------------------------------------------------------------------
     switch (this.state) {
       case 'dash': {
-        this.velocity.copy(this.dashDir).mulScalar(T.dashSpeed);
-        this.velocity.y = 0;
+        // bend the dash toward the stick a little so it's steerable, keep any upward momentum
+        if (wishLen > 0.001) {
+          const cross = this.dashDir.x * _wish.z - this.dashDir.z * _wish.x;
+          const ang = pc.math.clamp(-cross, -1, 1) * Math.min(1, T.dashSteer * dt);
+          const cs = Math.cos(ang), sn = Math.sin(ang);
+          this.dashDir.set(this.dashDir.x * cs - this.dashDir.z * sn, 0, this.dashDir.x * sn + this.dashDir.z * cs).normalize();
+        }
+        this.velocity.x = this.dashDir.x * T.dashSpeed;
+        this.velocity.z = this.dashDir.z * T.dashSpeed;
+        this.velocity.y = Math.max(0, this.velocity.y - T.gravity * 0.25 * dt);
         this.dashTimer -= dt;
         if (this.dashTimer <= 0) {
-          this.velocity.mulScalar(T.dashEndSpeedKeep);
+          this.velocity.x *= T.dashEndSpeedKeep; this.velocity.z *= T.dashEndSpeedKeep;
           this.state = this.grounded ? 'ground' : 'air';
           this.dashCd = T.dashCooldown;
         }
@@ -213,8 +228,8 @@ export class Movement {
         const n = this.wallNormal;
         const tx = -n.z * this.wallSide, tz = n.x * this.wallSide;
         const sp = Math.max(runSpeed, this.speedXZ);
-        this.velocity.x = tx * sp - n.x * 1.5;
-        this.velocity.z = tz * sp - n.z * 1.5;
+        this.velocity.x = tx * sp - n.x * 2.5;
+        this.velocity.z = tz * sp - n.z * 2.5;
         this.velocity.y -= T.gravity * T.wallRunGravity * dt;
         if (this.jumpBuf > 0) {
           this.jumpBuf = 0;
@@ -228,7 +243,7 @@ export class Movement {
         }
         _tmp.set(this.position.x, this.position.y + 1, this.position.z);
         _tmp2.copy(n).mulScalar(-1);
-        const hit = this.world.raycast(_tmp, _tmp2, 1.0);
+        const hit = this.world.raycast(_tmp, _tmp2, T.wallSnapDist + 0.4);
         if (!hit || hit.box.tag !== 'wall' || this.wallTimer <= 0) this.endWallRun(false);
         break;
       }
@@ -319,13 +334,13 @@ export class Movement {
       if (hit) { groundedNow = true; this.position.y -= hit.dist - 0.05; this.velocity.y = 0; }
     }
 
-    // --- vault: low obstacle ahead while moving on the ground -> hop onto it ----------------------
-    if (groundedNow && this.wallContact && this.speedXZ > 3 && this.state !== 'slide') {
+    // --- vault: low ledge ahead while moving on the ground -> hop onto it (level geometry only; props block) --
+    if (groundedNow && this.wallContact && this.wallContact.collider.tag === 'ground' && this.speedXZ > 3 && this.state !== 'slide') {
       const n = this.wallContact.normal;
       if (-(this.velocity.x * n.x + this.velocity.z * n.z) > 2) {
         _tmp.set(this.position.x - n.x * 0.9, this.position.y + T.vaultMaxHeight + 0.3, this.position.z - n.z * 0.9);
         const hit = this.world.raycastDown(_tmp, T.vaultMaxHeight + 0.3);
-        if (hit && hit.box.tag !== 'wall') {
+        if (hit && hit.box.tag === 'ground') {
           const topY = _tmp.y - hit.dist;
           if (topY - this.position.y > 0.3 && topY - this.position.y <= T.vaultMaxHeight) {
             this.position.y = topY + 0.02;
@@ -338,21 +353,34 @@ export class Movement {
       }
     }
 
-    // --- wall-run start: airborne, fast, touching a wall side-on ------------------------------------
-    if (!groundedNow && this.wallContact && this.state === 'air' && this.wallCooldown <= 0 && this.wallContact.collider.tag === 'wall' && this.speedXZ > T.wallRunMinSpeed && this.airTime > 0.08) {
-      const n = this.wallContact.normal;
-      _tmp.set(this.velocity.x, 0, this.velocity.z).normalize();
-      const into = -(_tmp.x * n.x + _tmp.z * n.z);
-      if (into < 0.85) {
-        this.wallNormal.set(n.x, 0, n.z).normalize();
-        const cx = -this.wallNormal.z, cz = this.wallNormal.x;
-        this.wallSide = (cx * _tmp.x + cz * _tmp.z) >= 0 ? 1 : -1;
-        this.state = 'wallrun';
-        this.wallTimer = S.wallRunTime;
-        this.velocity.y = Math.max(this.velocity.y, 0) + T.wallRunKick;
-        this.airJumpsLeft = S.airJumps;
-        if (S.dashResetOnTrick) this.dashChargesLeft = S.dashCharges;
-        this.events.push('wallrun');
+    // --- wall-run start: airborne, moving, a wall beside us (touching or within snap distance) -------
+    if (!groundedNow && this.state === 'air' && this.wallCooldown <= 0 && this.speedXZ > T.wallRunMinSpeed && this.airTime > 0.06) {
+      let n: pc.Vec3 | null = null;
+      if (this.wallContact && this.wallContact.collider.tag === 'wall') n = this.wallContact.normal;
+      else {
+        // probe left/right of the travel direction
+        _tmp.set(this.velocity.x, 0, this.velocity.z).normalize();
+        _tmp2.set(this.position.x, this.position.y + 1, this.position.z);
+        for (const side of [1, -1]) {
+          const dir = new pc.Vec3(-_tmp.z * side, 0, _tmp.x * side);
+          const hit = this.world.raycast(_tmp2, dir, T.wallSnapDist);
+          if (hit && hit.box.tag === 'wall') { n = dir.mulScalar(-1); break; }
+        }
+      }
+      if (n) {
+        _tmp.set(this.velocity.x, 0, this.velocity.z).normalize();
+        const into = -(_tmp.x * n.x + _tmp.z * n.z);
+        if (into < 0.92) {
+          this.wallNormal.set(n.x, 0, n.z).normalize();
+          const cx = -this.wallNormal.z, cz = this.wallNormal.x;
+          this.wallSide = (cx * _tmp.x + cz * _tmp.z) >= 0 ? 1 : -1;
+          this.state = 'wallrun';
+          this.wallTimer = S.wallRunTime;
+          this.velocity.y = Math.max(this.velocity.y, 0) + T.wallRunKick;
+          this.airJumpsLeft = S.airJumps;
+          if (S.dashResetOnTrick) this.dashChargesLeft = S.dashCharges;
+          this.events.push('wallrun');
+        }
       }
     }
 

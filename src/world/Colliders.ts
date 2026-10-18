@@ -1,6 +1,6 @@
 import * as pc from 'playcanvas';
 
-export type SurfaceTag = 'ground' | 'wall' | 'hazard' | 'checkpoint';
+export type SurfaceTag = 'ground' | 'wall' | 'prop' | 'hazard' | 'checkpoint';
 
 /** Oriented box collider. Rotation only (no scale) so normals transform cleanly. */
 export class BoxCollider {

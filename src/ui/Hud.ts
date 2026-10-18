@@ -7,11 +7,19 @@ export class Hud {
   private rift = document.getElementById('rift')!;
   private riftVal = document.getElementById('rift-val')!;
   private hint = document.getElementById('hint')!;
+  private prompt = document.getElementById('prompt')!;
   private debug = document.getElementById('debug') as HTMLPreElement;
   private hintTimer = 0;
   private lastFlow = -1;
   private lastEnergy = -1;
   private lastRift = -999;
+  private promptShown = false;
+
+  setPrompt(text: string | null): void {
+    const show = !!text;
+    if (show !== this.promptShown) { this.prompt.hidden = !show; this.promptShown = show; }
+    if (text && this.prompt.textContent !== text) this.prompt.textContent = text;
+  }
 
   setFlow(mult: number, progress01: number): void {
     if (mult !== this.lastFlow) { this.flowMult.textContent = `x${mult}`; this.lastFlow = mult; this.flow.classList.toggle('hot', mult >= 4); }

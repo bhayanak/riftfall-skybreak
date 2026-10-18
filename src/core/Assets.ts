@@ -6,7 +6,7 @@ export const WORLD_MODELS = [
   'rock_medium_1', 'rock_medium_2', 'rock_medium_3',
   'tree', 'tree_fruit', 'bush', 'grass_1', 'grass_2', 'pine_1', 'pine_3', 'common_tree_2', 'twisted_tree_1', 'dead_tree_2',
   'cloud_1', 'cloud_2', 'cloud_3',
-  'gem_blue', 'gem_pink', 'star',
+  'coin', 'gem_blue', 'gem_pink', 'star',
   'ruin_arch_round', 'ruin_arch_gothic', 'ruin_column_round', 'ruin_column_short', 'ruin_wall_broken', 'ruin_wall_overgrown',
   'ruin_wall_arch_broken', 'ruin_floor', 'ruin_stairs', 'ruin_statue_stag', 'ruin_torch', 'ruin_flag', 'ruin_bridge',
 ] as const;

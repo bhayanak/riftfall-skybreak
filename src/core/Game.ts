@@ -51,8 +51,8 @@ export class Game {
   private runId = 0;
   private fps = 60; private fpsAcc = 0; private fpsFrames = 0;
   private drawCalls = 0;
-  private hintTimer = 0;
-  private hintStage = 0;
+  private seenHowTo = false;
+  private helpOpen = false;
 
   private constructor(app: pc.AppBase, canvas: HTMLCanvasElement, device: DeviceInfo) {
     this.app = app;
@@ -128,7 +128,7 @@ export class Game {
     await this.env.setBiome(b.id);
     if (id !== this.runId) return;
     const difficulty = 0.6 + this.stage * 0.5;
-    this.gen.generate(this.seed + this.stage * 7919, b, difficulty, 10 + Math.min(4, this.stage));
+    this.gen.generate(this.seed + this.stage * 7919, b, difficulty, 10 + Math.min(4, this.stage), this.stage);
     this.player.movement.killY = this.gen.lowestTop() - 30;
     this.rift.setColor(b.rift);
     this.vfx.setColor(b.rift);
@@ -142,10 +142,23 @@ export class Game {
     this.player.movement.events.length = 0;
     this.camera.snapTo(this.gen.spawn, 0);
     this.rift.reset(this.gen.spawn.z + 55, 0);
-    this.hintStage = 0;
-    this.hud.showHint(this.device.isTouch ? `${b.name} · RUN. THE RIFT IS BEHIND YOU.` : `${b.name} · WASD · SPACE JUMP · SHIFT DASH · E GRAPPLE · C SLIDE`, 6);
+    this.hud.setPrompt(null);
     this.overlays.hide();
     this.phase = 'playing';
+    if (!this.seenHowTo) { this.seenHowTo = true; void this.showHelp(); }
+    else this.hud.showHint(`${b.name} · THE RIFT IS BEHIND YOU — RUN`, 4);
+  }
+
+  /** Pauses the run and shows the controls card until dismissed. */
+  private async showHelp(): Promise<void> {
+    if (this.helpOpen) return;
+    this.helpOpen = true;
+    const id = this.runId;
+    await this.overlays.howToPlay(this.device.isTouch);
+    this.helpOpen = false;
+    if (id !== this.runId) return;
+    this.input.endFrame();
+    this.hud.showHint(`${this.biome().name} · THE RIFT IS BEHIND YOU — RUN`, 4);
   }
 
   private respawnAtCheckpoint(): void {
@@ -208,7 +221,9 @@ export class Game {
       if (input.wasPressed('pick1')) this.overlays.pick(0);
       else if (input.wasPressed('pick2')) this.overlays.pick(1);
       else if (input.wasPressed('pick3')) this.overlays.pick(2);
-      else if (input.wasPressed('jump') || input.wasPressed('confirm')) this.overlays.pick(this.phase === 'dead' ? 0 : this.overlays.hover);
+      else if (input.wasPressed('jump') || input.wasPressed('confirm') || (this.helpOpen && input.wasPressed('help'))) this.overlays.pick(this.phase === 'dead' || this.helpOpen ? 0 : this.overlays.hover);
+      // keep the world alive behind the card (coins spin, portal breathes) but freeze the player/rift
+      if (this.gen && this.player) this.gen.update(dt, this.player.movement.position);
       input.endFrame();
       return;
     }
@@ -221,6 +236,7 @@ export class Game {
 
     if (input.wasPressed('restart')) { void this.startRun(true); input.endFrame(); return; }
     if (input.wasPressed('debug')) this.hud.toggleDebug();
+    if (input.wasPressed('help')) { void this.showHelp(); input.endFrame(); return; }
 
     const m = this.player.movement;
     if (!this.started && (Math.abs(input.move.x) + Math.abs(input.move.y) > 0.1 || input.wasPressed('jump'))) this.started = true;
@@ -229,11 +245,16 @@ export class Game {
     this.player.update(dt, input, this.camera.yawRad);
     this.camera.update(dt, input, m.position, m.speedXZ);
     this.camera.setFlow(this.flow.intensity01);
-    this.gen.update(dt, m.position);
+    // grapple targeting feedback: highlight the ring you'd grab and show the key
+    const fwd = Math.abs(input.move.x) + Math.abs(input.move.y) > 0.1 ? this.camera.forwardXZ() : m.facing;
+    const target = m.state === 'grapple' ? null : this.gen.findAnchor(m.position, fwd, m.stats.grappleRange);
+    this.gen.update(dt, m.position, target);
+    this.hud.setPrompt(target ? (this.device.isTouch ? 'GRAPPLE · TAP' : 'E · GRAPPLE') : m.state === 'grapple' ? (this.device.isTouch ? 'GRAPPLE · LET GO' : 'E · LET GO') : null);
     this.distance = Math.max(this.distance, this.gen.spawn.z - m.position.z);
 
-    // rift pressure: starts 2 s after the first move, ramps with stage and time; paused briefly after a fall
-    const riftSpeed = !this.started || this.runTime < 2 || this.riftGrace > 0 ? 0 : Math.min(7.5 + this.stage * 0.8, 4.5 + this.stage * 0.8 + this.runTime * 0.08);
+    // rift pressure: starts 3 s after the first move, ramps with stage and time; paused briefly after a fall
+    const base = 3.6 + this.stage * 0.7;
+    const riftSpeed = (!this.started || this.runTime < 3 || this.riftGrace > 0 ? 0 : Math.min(base + 2.5, base + this.runTime * 0.05)) * m.stats.riftSlow;
     this.rift.speed = riftSpeed;
     this.rift.update(dt, m.position.z, m.position.y);
     this.gen.riftSweep(this.rift.z);
@@ -294,12 +315,10 @@ export class Game {
 
     if (this.gen.atPortal(m.position)) { void this.onPortal(); input.endFrame(); return; }
 
-    this.hintTimer -= dt;
-    if (this.stage === 0 && this.hintTimer <= 0) {
-      const z = this.gen.spawn.z - m.position.z;
-      if (this.hintStage === 0 && z > 20) { this.hud.showHint(this.device.isTouch ? 'DASH IN THE AIR TO CROSS BIG GAPS' : 'SHIFT IN THE AIR TO CROSS BIG GAPS', 4); this.hintStage = 1; this.hintTimer = 8; }
-      else if (this.hintStage === 1 && this.gen.anchors.some((a) => a.pos.z < m.position.z && a.pos.z > m.position.z - 24)) { this.hud.showHint(this.device.isTouch ? 'GRAPPLE WHEN THE RING IS AHEAD' : 'PRESS E WHEN THE RING IS AHEAD', 4); this.hintStage = 2; this.hintTimer = 8; }
-      else if (this.hintStage === 2 && m.wallContact) { this.hud.showHint('JUMP INTO WALLS TO RUN ALONG THEM', 3); this.hintStage = 3; }
+    // chunk tips (first two biomes only; after that you know the moves)
+    if (this.stage < 2) {
+      const h = this.gen.popHint(m.position.z);
+      if (h) this.hud.showHint(this.device.isTouch ? h.touch : h.text, 5);
     }
 
     this.hud.setFlow(this.flow.multiplier, this.flow.progress01);

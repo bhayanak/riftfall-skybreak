@@ -43,6 +43,7 @@ WORLD = {
     "world/cloud_2.glb": f"{USN}/Nature/glTF/Cloud_2.gltf",
     "world/cloud_3.glb": f"{USN}/Nature/glTF/Cloud_3.gltf",
     # pickups
+    "world/coin.glb": f"{USN}/Powerups and Pickups/glTF/Coin.gltf",
     "world/gem_blue.glb": f"{USN}/Powerups and Pickups/glTF/Gem_Blue.gltf",
     "world/gem_pink.glb": f"{USN}/Powerups and Pickups/glTF/Gem_Pink.gltf",
     "world/star.glb": f"{USN}/Powerups and Pickups/glTF/Star.gltf",

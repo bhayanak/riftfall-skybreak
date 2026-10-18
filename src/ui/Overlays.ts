@@ -22,18 +22,48 @@ export class Overlays {
 
   /** Resolves with the chosen index. Keyboard 1/2/3 handled by caller via pick(i). */
   chooseUpgrade(biomeName: string, energy: number, options: Upgrade[]): Promise<number> {
-    this.show('RIFT BREACHED', `${biomeName} AHEAD · ENERGY ${energy}`, 'CHOOSE ONE · 1 / 2 / 3');
+    this.show('RIFT BREACHED', `${biomeName} AHEAD · ENERGY ${energy}`, 'PICK ONE · PRESS 1 / 2 / 3 OR CLICK');
     this.cards.innerHTML = '';
     this.hovered = 0;
     options.forEach((u, i) => {
       const el = document.createElement('button');
       el.className = 'card';
-      el.innerHTML = `<span class="key">${i + 1}</span><span class="icon">${u.icon}</span><span class="name">${u.name}</span><span class="desc">${u.desc}</span>`;
+      el.innerHTML = `<span class="key">${i + 1}</span><span class="icon">${u.icon}</span><span class="name">${u.name}</span><span class="desc">${u.desc}</span><span class="why">${u.why}</span>`;
       el.addEventListener('click', () => this.pick(i));
       el.addEventListener('pointerenter', () => this.setHover(i));
       this.cards.appendChild(el);
     });
     this.setHover(0);
+    return new Promise((res) => { this.resolver = res; });
+  }
+
+  /** Controls card. Resolves on any pick (Space / click / tap). */
+  howToPlay(touch: boolean): Promise<number> {
+    this.show('RIFTFALL', 'HOW TO PLAY', touch ? 'TAP TO START' : 'PRESS SPACE TO START · H ANYTIME FOR THIS CARD');
+    this.cards.innerHTML = '';
+    const rows: [string, string, string][] = touch
+      ? [['◉', 'MOVE', 'Left stick. Drag right side to look.'], ['JUMP', 'JUMP ×2', 'Tap again in the air for a second jump.'],
+         ['DASH', 'AIR DASH', 'Tap mid-jump to cross big gaps.'], ['GRAPPLE', 'GRAPPLE', 'When a ring glows gold, tap to swing. Tap again to let go.'],
+         ['WALL', 'WALL-RUN', 'Jump towards a wall while moving. Jump again to leap off.'], ['SLIDE', 'SLIDE', 'Slide while sprinting for a burst of speed.'],
+         ['▲', 'THE RIFT', 'It chases you. Keep moving forward. Reach the portal.']]
+      : [['WASD', 'MOVE', 'Mouse to look (click once to capture).'], ['SPACE', 'JUMP ×2', 'Press again in the air for a second jump.'],
+         ['SHIFT', 'AIR DASH', 'Press mid-jump to cross big gaps.'], ['E', 'GRAPPLE', 'When a ring glows gold, press E to swing. E again to let go.'],
+         ['SPACE', 'WALL-RUN', 'Jump towards a wall while moving. Space again to leap off.'], ['C', 'SLIDE', 'Slide while sprinting for a burst of speed.'],
+         ['▲', 'THE RIFT', 'It chases you. Keep moving forward. Reach the portal.']];
+    const list = document.createElement('div');
+    list.className = 'howto';
+    for (const [key, name, text] of rows) {
+      const r = document.createElement('div');
+      r.className = 'row';
+      r.innerHTML = `<kbd>${key}</kbd><b>${name}</b><span>${text}</span>`;
+      list.appendChild(r);
+    }
+    this.cards.appendChild(list);
+    const go = document.createElement('button');
+    go.className = 'card single';
+    go.innerHTML = `<span class="icon">▶</span><span class="name">RUN</span>`;
+    go.addEventListener('click', () => this.pick(0));
+    this.cards.appendChild(go);
     return new Promise((res) => { this.resolver = res; });
   }
 

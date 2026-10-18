@@ -56,6 +56,12 @@ export class CameraRig {
 
   get yawRad(): number { return this.yaw * pc.math.DEG_TO_RAD; }
 
+  /** Unit XZ direction the camera looks along. */
+  forwardXZ(): pc.Vec3 {
+    const y = this.yawRad;
+    return new pc.Vec3(-Math.sin(y), 0, -Math.cos(y));
+  }
+
   update(dt: number, input: Input, focus: pc.Vec3, speedXZ: number): void {
     this.yaw -= input.look.x * CAM.mouseSens;
     this.pitch = pc.math.clamp(this.pitch + input.look.y * CAM.mouseSens, CAM.pitchMin, CAM.pitchMax);
