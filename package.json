@@ -1,0 +1,21 @@
+{
+  "name": "riftfall-skybreak",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "assets:fetch": "tools/fetch-assets.sh all",
+    "assets:build": "node tools/build-assets.mjs"
+  },
+  "dependencies": {
+    "playcanvas": "^2.23.3"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0",
+    "vite": "^7.0.0"
+  }
+}
