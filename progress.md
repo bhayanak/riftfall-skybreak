@@ -17,15 +17,22 @@ Newest entries at the top of each section. Update this file at the end of every 
 | Assets — ambientCG materials | ✅ 26/26 sets @1K-JPG (190 MB) |
 | Assets — Mixamo | ✅ 9 clips downloaded (auto-rigged on our mesh) → retargeted into `player_anims.glb` |
 | Asset pipeline tooling | ✅ `tools/fetch-assets.sh`, `tools/build-assets.mjs`, `tools/fbx2glb.py`, `tools/build-player-anims.py`, `tools/preview-anims.py`, `tools/export-mixamo-mesh.py`, `tools/inspect-fbx.py` |
-| Phase 0 — repo bootstrap | ✅ Vite 7 + TS 5.9 + PlayCanvas 2.23 (`AppBase`, WebGL2), Pages workflow, local git repo (2 commits, no remote yet) |
-| Phase 1 — movement prototype | ✅ run / jump (coyote, buffer, variable height) / dash (ground+air, 1 charge) / camera / greybox course / touch controls / debug overlay — **feel pass with a human still pending** |
-| Phase 2 — movement slice | ⬜ next: wall-run, grapple, slide/vault, FLOW, chunks, portal/upgrades |
-| Phase 3 — visual slice | ⬜ `player_anims.glb` (31 clips) already built — character swap-in is unblocked |
-| Phase 4 — procedural runs | ⬜ |
-| Phase 5 — content | ⬜ |
+| Phase 0 — repo bootstrap | ✅ Vite 7 + TS 5.9 + PlayCanvas 2.23 (`AppBase`, WebGL2), Pages workflow, local git on `main` (4 commits, author `bhayanak`) |
+| Phase 1 — movement prototype | ✅ superseded by v2 — greybox removed |
+| Phase 2 — movement slice | ✅ **v2**: wall-run, grapple (swing + auto-release), slide, auto-vault, air-jump stat, FLOW x1–x5, procedural chunks (11 templates), portal → 3-card upgrades (11 upgrades), Rift collapse wall, checkpoints, run-over/retry |
+| Phase 3 — visual slice | ✅ **v2 (first pass)**: Superhero mesh + 31-clip anim state machine, HDRI skybox + IBL per biome (Sky/Fire/Void), bloom/vignette/grading, fog, Quaternius kit islands + ruins + trees + clouds, gems, emissive portal, Rift shards, speed trail VFX, 15 Kenney SFX — **visual polish pending** (see Known issues) |
+| Phase 4 — procedural runs | ◑ generator + difficulty ramp done; no path validator yet |
+| Phase 5 — content | ◑ 3 biomes cycle with difficulty; no boss |
 | Phase 6 — web optimisation / CrazyGames | ⬜ |
 
-Raw asset footprint on disk: **~3 GB** in `assets-source/` (git-ignored). Shipped so far: `public/assets/` = **2.1 MB** (2.04 MB is the animation bundle; engine is 311 KB gzip).
+Raw asset footprint on disk: **~3 GB** in `assets-source/` (git-ignored). Shipped: `public/assets/` = **11 MB** (3 HDR skies 4.8 MB · world kit 3 MB · character 1.2 MB · anims 2 MB · SFX); engine 311 KB gzip.
+
+## Known issues (v2) — next polish pass
+- Island look: kit rock-platforms scale into "flower pots"; slab + grey rim reads boxy. Needs a dedicated island mesh pass (or sculpted underside from 2–3 rocks) and matching the grass colour to the kit's green.
+- Decoration can land on the running lane / in front of the camera (no camera collision for props). Keep decor to island edges, add camera boom collision against decor bounds.
+- No music; SFX only.
+- Mobile: untested on a real phone since v2 (touch layout exists).
+- Draw calls ~800 on desktop — fine for now, needs instancing before mobile-low.
 
 ---
 
@@ -86,6 +93,13 @@ Rebuild: `/Applications/Blender.app/Contents/MacOS/Blender -b -P tools/build-pla
 
 ## Session log
 
+### 2026-10-18 (night) — v2: "make it a game" + repo identity
+- Feedback: greybox was "monotonous and ugly". Pulled Phases 2+3 forward in one push (commit `c984437`): `Assets.ts` registry, `Environment.ts` (HDRI skybox/IBL via `EnvLighting`, `CameraFrame` bloom/vignette/grading, per-biome fog/sun), `Island.ts` (kit-built islands, walls, beams), `WorldGenerator.ts` (seeded 11-template chunk system, gems, grapple anchors, portal, scenery), `Rift.ts` (advancing wall, sinks islands), `Movement.ts` rewrite (wall-run / grapple swing / slide / vault / air jumps / per-run `RunStats`), `PlayerAnimation.ts` (31-clip state machine; **clips must be keyed by `AnimTrack.name`** — asset names contain `.`/`/` which `assignAnimation` treats as paths), `FlowSystem.ts`, `Upgrade.ts` (11 upgrades), `VFX.ts` (pooled emissive sprites), `Sfx.ts` (Web Audio pool), `Overlays.ts` (loading / upgrade cards / run over).
+- Blender: `tools/build-world-kit.py` builds `public/assets/player/superhero_male.glb` (hair merged, 1K JPEG) and 38 world GLBs (JPEG, ≤512 px).
+- **Death loop fixed**: `runId` guards on all async phase transitions, `killY` derived from the lowest island, respawn restores Rift-swallowed islands ahead (`restoreAhead`) + 1.5 s Rift grace, Rift clock starts on first input. Verified: 3 forced falls → solid respawn each time, Rift catch → overlay → Space restarts cleanly.
+- Repo identity: user set `.git/config` to `bhayanak <ajayyadavmca@gmail.com>`; rewrote all prior commits (`git rebase --root --exec 'commit --amend --reset-author'`) + reflog expire + gc — zero `hpe.com` left in history. `.git/config` untouched.
+- Gotcha: Vite's static index drops files that vanish momentarily (git stash) → serves `index.html` for the GLB ("Invalid magic number 0x6f64213c"). Restart `vite`.
+
 ### 2026-10-18 (evening) — Phase 0 + Phase 1 implemented, animation bundle built
 - **Mixamo clips verified** with headless Blender (`tools/inspect-fbx.py`): 9 clips, Mixamo 25-bone rig, all in place. Blender 5.4 alpha installed; note its layered-action API (`action.layers[].strips[].channelbags[].fcurves`, action slots).
 - **Phase 0**: `package.json` (Vite 7, TS 5.9, PlayCanvas 2.23.3), `tsconfig.json`, `vite.config.ts` (`VITE_BASE` for Pages), `index.html` (HUD + touch layer + debug `<pre>`), `.github/workflows/deploy.yml`, `tools/build-assets.mjs` (copies Kenney proto textures/GLBs to `public/assets/proto`). Decision: `public/assets/` is the shipped asset root (Vite static), not a top-level `assets/`.
@@ -120,10 +134,9 @@ Rebuild: `/Applications/Blender.app/Contents/MacOS/Blender -b -P tools/build-pla
 ---
 
 ## Blockers / needs from you
-1. **Play it.** `npm run dev` → http://localhost:5173 → click to capture mouse, WASD / Space / Shift, R restart, ` (backquote) debug overlay. The numbers are right; whether it *feels* right is the Phase 1 exit criterion and needs a human. Tell me what's off (too floaty? dash too short? camera too loose?) — everything lives in `TUNING` / `CAM`.
-2. **Create the GitHub repo and push** when you want a public test URL (the Pages workflow is ready; it expects branch `main`). Enable Pages → Source: GitHub Actions.
-3. ~~Rotate the password pasted in chat~~ — still recommended if not done.
-4. Choose music source (O2) by Phase 3.
+1. **Remote mismatch — do not push yet.** `origin` (`git@github-todo:bhayanak/riftfall-skybreak.git`) currently holds 14 commits of an unrelated project (`morpheus-mcp-server`, `packages/morpheus-server/…`) and shares no history with this repo (`main` is ahead 3 / behind 14). Either (a) that GitHub repo was created from / pointed at the wrong source — empty it or create a fresh `riftfall-skybreak` repo, then `git push -u origin main`; or (b) if that content is intentional, tell me and I'll put this game under a subfolder/branch. I did not fetch, merge, or push anything.
+2. **Play v2** and say what's wrong first: controls feel, difficulty ramp, visuals. Everything tunable is in `TUNING` (movement), `CAM` (camera), `BIOMES` (look), chunk templates (`WorldGenerator.ts`).
+3. Choose music source (O2).
 
 ## Next up
-Phase 2 — wall-run (walls are already tagged + placed in the canyon), grapple, slide/vault, FLOW meter, `Chunk.ts` + `WorldGenerator.ts`, portal + upgrade cards. Optionally pull the Superhero mesh + `player_anims.glb` in early (Phase 3 item) since the bundle exists.
+Visual polish pass on islands (dedicated island silhouette, kit-matched grass, decor off the lane, camera vs props), then a human feel pass → tune. Push once the remote is sorted so a Pages URL exists for phone testing.
