@@ -1,4 +1,4 @@
-export type Action = 'jump' | 'dash' | 'grapple' | 'slide' | 'restart' | 'debug' | 'help' | 'pick1' | 'pick2' | 'pick3' | 'confirm';
+export type Action = 'jump' | 'dash' | 'grapple' | 'slide' | 'restart' | 'debug' | 'help' | 'mute' | 'pick1' | 'pick2' | 'pick3' | 'confirm';
 
 const KEYS: Record<string, Action> = {
   Space: 'jump',
@@ -10,6 +10,7 @@ const KEYS: Record<string, Action> = {
   KeyR: 'restart',
   KeyH: 'help',
   Escape: 'help',
+  KeyM: 'mute',
   Backquote: 'debug',
   Digit1: 'pick1',
   Digit2: 'pick2',

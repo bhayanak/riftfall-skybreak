@@ -14,6 +14,8 @@ import { VFX } from '../graphics/VFX';
 import { FlowSystem } from '../progression/FlowSystem';
 import { UpgradeDeck } from '../progression/Upgrade';
 import { Sfx } from '../audio/Sfx';
+import { Music } from '../audio/Music';
+import { Save } from '../progression/Save';
 import { Hud } from '../ui/Hud';
 import { TouchControls } from '../ui/TouchControls';
 import { Overlays } from '../ui/Overlays';
@@ -32,6 +34,8 @@ export class Game {
   readonly flow = new FlowSystem();
   readonly deck = new UpgradeDeck();
   readonly sfx: Sfx;
+  readonly music = new Music();
+  readonly save = new Save();
   player!: Player;
   camera!: CameraRig;
   env!: Environment;
@@ -43,7 +47,8 @@ export class Game {
   seed = (Date.now() % 100000) | 0;
   stage = 0;              // 0 sky, 1 fire, 2 void, 3 sky(harder)...
   energy = 0;
-  distance = 0;
+  distance = 0;           // total this run, across stages
+  private distanceBase = 0;
   private checkpoint = 0;
   private runTime = 0;
   private started = false;     // player has moved; the Rift clock runs from here
@@ -61,6 +66,8 @@ export class Game {
     const base = `${import.meta.env.BASE_URL}assets/`;
     this.assets = new Assets(app, base);
     this.sfx = new Sfx(base);
+    this.sfx.muted = this.music.muted = this.save.data.muted;
+    this.sfx.onReady = (ctx, master) => this.music.attach(ctx, master);
   }
 
   static async create(canvas: HTMLCanvasElement): Promise<Game> {
@@ -117,7 +124,7 @@ export class Game {
     this.phase = 'loading';
     const id = ++this.runId;
     if (fresh) {
-      this.stage = 0; this.energy = 0; this.distance = 0;
+      this.stage = 0; this.energy = 0; this.distance = 0; this.distanceBase = 0;
       this.player.movement.stats = defaultStats();
       this.deck.reset();
       this.flow.reset();
@@ -195,6 +202,7 @@ export class Game {
     this.deck.take(options[i], this.player.movement.stats);
     this.sfx.play('ui_confirm', 0.8);
     this.stage++;
+    this.distanceBase = this.distance;
     await this.startRun(false);
   }
 
@@ -206,7 +214,11 @@ export class Game {
     this.vfx.emit(this.player.movement.position, 50, 10, 0.4, 1, 1, 2);
     await new Promise((r) => setTimeout(r, 900));
     if (id !== this.runId) return;
-    await this.overlays.runOver(reason, this.energy, this.flow.best, this.distance);
+    const beat = this.save.recordRun(this.distance, this.energy, this.stage);
+    const s = this.save.data;
+    const best = `BEST ${s.bestDistance} m · STAGE ${s.bestStage + 1} · ${s.runs} RUN${s.runs === 1 ? '' : 'S'}`;
+    const record = beat.distance ? 'NEW DISTANCE RECORD' : beat.stage ? 'NEW STAGE RECORD' : beat.energy ? 'NEW ENERGY RECORD' : '';
+    await this.overlays.runOver(reason, this.energy, this.flow.best, this.distance, this.stage, best, record);
     if (id !== this.runId) return;
     this.sfx.play('ui_confirm', 0.8);
     await this.startRun(true);
@@ -216,6 +228,15 @@ export class Game {
   private update(dt: number): void {
     const input = this.input;
     input.beginFrame();
+
+    if (input.wasPressed('mute')) {
+      const m = !this.sfx.muted;
+      this.sfx.muted = this.music.muted = m;
+      this.save.setMuted(m);
+      this.hud.showHint(m ? 'SOUND OFF' : 'SOUND ON', 1.2);
+    }
+    const playing = this.phase === 'playing' && !this.overlays.visible;
+    this.music.update(dt, playing, this.flow ? this.flow.intensity01 : 0, this.rift && this.player ? pc.math.clamp(1 - this.rift.distanceTo(this.player.movement.position.z) / 30, 0, 1) : 0, this.stage);
 
     if (this.overlays.visible) {
       if (input.wasPressed('pick1')) this.overlays.pick(0);
@@ -250,7 +271,7 @@ export class Game {
     const target = m.state === 'grapple' ? null : this.gen.findAnchor(m.position, fwd, m.stats.grappleRange);
     this.gen.update(dt, m.position, target);
     this.hud.setPrompt(target ? (this.device.isTouch ? 'GRAPPLE · TAP' : 'E · GRAPPLE') : m.state === 'grapple' ? (this.device.isTouch ? 'GRAPPLE · LET GO' : 'E · LET GO') : null);
-    this.distance = Math.max(this.distance, this.gen.spawn.z - m.position.z);
+    this.distance = Math.max(this.distance, this.distanceBase + Math.max(0, this.gen.spawn.z - m.position.z));
 
     // rift pressure: starts 3 s after the first move, ramps with stage and time; paused briefly after a fall
     const base = 3.6 + this.stage * 0.7;

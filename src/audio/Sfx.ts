@@ -9,10 +9,12 @@ export class Sfx {
   private master!: GainNode;
   private lastPlay = new Map<SfxName, number>();
   muted = false;
+  /** Fired once the AudioContext exists (first user gesture). */
+  onReady: ((ctx: AudioContext, master: GainNode) => void) | null = null;
 
   constructor(private base: string) {
     const unlock = () => {
-      if (!this.ctx) this.init();
+      if (!this.ctx) { this.init(); this.onReady?.(this.ctx!, this.master); }
       this.ctx!.resume();
     };
     window.addEventListener('pointerdown', unlock, { passive: true });

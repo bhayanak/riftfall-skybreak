@@ -118,48 +118,50 @@ Budget gate (CI fails if exceeded): **boot bundle ≤ 20 MB**, any single GLB �
 - [x] `index.html` fullscreen canvas + HUD + touch layer; `Device.ts` (touch / profile / WebGPU)
 - [x] `.github/workflows/deploy.yml` → GitHub Pages (needs the remote repo + Pages enabled)
 - [x] `tools/fetch-assets.sh`, `tools/build-assets.mjs`
-- [ ] Push to GitHub, confirm the Pages URL loads — **needs you to create the repo**
+- [x] Push to GitHub (`bhayanak/riftfall-skybreak`); Pages enabled by the workflow (`configure-pages` with `enablement: true`)
 
-### Phase 1 — Movement prototype (grey)  ✅ code / ⏳ feel pass
+### Phase 1 — Movement prototype (grey)  ✅ superseded by v2
 - [x] Kinematic capsule controller: accel/decel, coyote time, jump buffer, variable jump height
 - [x] Dash (ground + air, 1 charge refilled on landing), camera follow with speed-FOV + dash pulse + boom collision
 - [x] Greybox course: 7 islands, hop / step-up / dash gap / canyon with wall-run walls / goal flag, checkpoints
 - [x] Mobile: virtual joystick + Jump/Dash/Grapple buttons, right-half drag look (auto-vault lands with vault in Phase 2)
 - [x] Debug overlay (backquote): fps, draw calls, state, velocity, checkpoint
-- [ ] **Exit:** 60 s of running/jumping/dashing feels good on desktop *and* a phone — waiting on a human play-test
+- [x] **Exit:** play-tested (20 min) → v2.1 feel fixes landed (solid props, dash keeps height, double jump, wall snap)
 
-### Phase 2 — Movement vertical slice
-- [ ] Wall-run (surface tagging, stick/detach rules, wall-jump)
-- [ ] Grapple (anchor detection cone, rope constraint, swing release boost)
-- [ ] Slide / vault, ledge assist
-- [ ] FLOW: chain detection, decay, multiplier → HUD
-- [ ] `Chunk.ts` + 10 greybox chunks + `WorldGenerator.ts` (connector matching only)
-- [ ] Portal trigger → 3-card upgrade UI (Kenney UI Pack) → 6 upgrades wired
-- [ ] Rift collapse behind player (kill volume that advances)
-- **Exit:** complete grey run: start → 10 chunks → portal → upgrade → next run.
+### Phase 2 — Movement vertical slice  ✅ v2.1
+- [x] Wall-run (surface tagging, stick/detach rules, wall-jump, 1.1 m snap)
+- [x] Grapple (anchor cone, swing, release boost; gold-ring targeting + key prompt)
+- [x] Slide / vault (level geometry only), ledge assist
+- [x] FLOW: chain detection, decay, multiplier → HUD
+- [x] `WorldGenerator.ts` with 11 chunk templates, seeded; fixed teaching order on stage 0, per-chunk hints
+- [x] Portal trigger → 3-card upgrade UI → 11 upgrades wired (each with a "why")
+- [x] Rift collapse behind player (advancing wall that sinks islands; grace after falls)
+- [x] How-to card (first run, `H`), run-over card with records
+- **Exit:** complete run: start → chunks → portal → upgrade → next biome. ✅
 
-### Phase 3 — Visual vertical slice (Sky Ruins)
-- [ ] Player: `Superhero_Male_FullBody` + hair, `player_anims.glb` (UAL1+UAL2 subset, fingers stripped), anim state graph
-- [ ] Sky: `kloofendal_48d` HDRI skybox + IBL; 2–3 cloud card layers with parallax; height fog
-- [ ] Islands: Stylized Nature MegaKit rocks/trees + Ruins (Quaternius if downloaded, else Castle/Graveyard Kit) re-skinned with ambientCG sets
-- [ ] Waterfall (scrolling mesh + mist billboard), portal (ring + emissive + scrolling UV + particles)
-- [ ] Player trail + dash/jump/land VFX from Particle Pack; FLOW drives intensity
-- [ ] SFX from Kenney packs; placeholder music; decide O2
-- [ ] Asset pipeline producing KTX2 + meshopt; `manifest.json`; boot bundle measured
-- **Exit:** publicly showable 90-second clip; boot bundle < 20 MB.
+### Phase 3 — Visual vertical slice (Sky Ruins)  ✅ first pass
+- [x] Player: `Superhero_Male_FullBody` + hair in a navy/teal runner suit, `player_anims.glb` (31 clips), anim state machine
+- [x] Sky: HDRI skybox + IBL per biome; kit cloud meshes; height fog; bloom/vignette/grading
+- [x] Islands: Ultimate Stylized Nature platforms + Ruins + trees/rocks (solid, off the centre lane); gold coins
+- [ ] Waterfall; portal particles (portal ring + core + burst exist)
+- [x] Speed trail + dash/jump/land VFX; FLOW drives intensity
+- [x] 15 Kenney SFX; **procedural adaptive music** (O2 = procedural for now)
+- [ ] KTX2 + meshopt pipeline; `manifest.json` — shipped assets are 11 MB JPEG/GLB, under budget without it
+- **Exit:** boot bundle < 20 MB ✅ (11 MB assets + 354 KB gzip engine); showable clip ⏳
 
-### Phase 4 — Procedural runs
-- [ ] 30+ chunks (table in vision doc), connector rules, difficulty curve by chunk tags
+### Phase 4 — Procedural runs  ◑
+- [x] 11 chunk templates, difficulty curve by stage + chunk index, teaching order on stage 0
+- [ ] 30+ chunks, connector rules
 - [ ] 1 world event (Island Fracture) + Portal Collapse escape
-- [ ] 10 upgrades total, run seed + daily seed
+- [x] 11 upgrades; run seed — [ ] daily seed
+- [x] Persistent best run (localStorage)
 - **Exit:** 10 consecutive generated runs with no dead ends / impossible gaps (automated path validator).
 
-### Phase 5 — Content
-- [ ] Fire Rift (lava sets, `the_sky_is_on_fire`, ash particles, meteor event)
-- [ ] Void (Onyx/Ice sets, `satara_night`, gravity-shift event)
+### Phase 5 — Content  ◑
+- [x] Fire Rift / Void biomes: HDRI, fog, tint, Rift colour — [ ] lava/ice dressing, ash particles, meteor / gravity events
 - [ ] First boss: Rift Titan (Ultimate Monsters) — route destruction, not combat
-- [ ] Mixamo gap animations retargeted (wall-run, grapple, hard landing)
-- [ ] Cosmetics unlocks (hair, colour variants, trail colours), adaptive music layers
+- [x] Mixamo gap animations retargeted (wall-run, swing, hard landing, vault, flip, dive roll)
+- [ ] Cosmetics unlocks (hair, suit colours, trail colours); [x] adaptive music layers (procedural)
 
 ### Phase 6 — Web optimisation + CrazyGames
 - [ ] CrazyGames HTML5 SDK: init, ad breaks at portal, `happytime()`, save via SDK data module
@@ -171,7 +173,7 @@ Budget gate (CI fails if exceeded): **boot bundle ≤ 20 MB**, any single GLB �
 
 ## 4. Immediate next actions (ordered)
 
-1. **You:** play the greybox (`npm run dev`) and report feel notes; create the GitHub repo + push `main` for a Pages URL.
-2. **Me:** Phase 2 — wall-run on the tagged canyon walls, grapple, slide/vault, FLOW, chunk system, portal + upgrade cards.
-3. Pull the Superhero mesh + `player_anims.glb` into the game with an anim state graph (early Phase 3) so Phase 2 moves can be previewed with real animation.
-4. `tools/fbx2glb.py` full run on Ruins / Stylized Nature when Phase 3 dressing starts (6 files validated, ~1 s each).
+1. **You:** play v2.1 and report what is still bad (collision, dash, wall-run/grapple readability, ramp, music).
+2. **Me (Phase 4):** path validator (walk each generated route with the movement envelope, assert reachability), more templates (split-path, moving island, collapsing bridge), Island Fracture event, daily seed.
+3. **Me (Phase 5):** Fire/Void dressing (lava/ice props + ash/ember particles), Rift Titan route-destruction boss on stage 3, suit colour unlocks.
+4. **Me (Phase 6):** quality profiles + instancing for mobile, CrazyGames SDK scaffold (init, ad break at portal, `happytime`, SDK save).

@@ -49,7 +49,7 @@ export class Overlays {
       : [['WASD', 'MOVE', 'Mouse to look (click once to capture).'], ['SPACE', 'JUMP ×2', 'Press again in the air for a second jump.'],
          ['SHIFT', 'AIR DASH', 'Press mid-jump to cross big gaps.'], ['E', 'GRAPPLE', 'When a ring glows gold, press E to swing. E again to let go.'],
          ['SPACE', 'WALL-RUN', 'Jump towards a wall while moving. Space again to leap off.'], ['C', 'SLIDE', 'Slide while sprinting for a burst of speed.'],
-         ['▲', 'THE RIFT', 'It chases you. Keep moving forward. Reach the portal.']];
+         ['▲', 'THE RIFT', 'It chases you. Keep moving forward. Reach the portal.'], ['M', 'SOUND', 'Toggle music and effects. R restarts the run.']];
     const list = document.createElement('div');
     list.className = 'howto';
     for (const [key, name, text] of rows) {
@@ -67,9 +67,14 @@ export class Overlays {
     return new Promise((res) => { this.resolver = res; });
   }
 
-  runOver(reason: string, energy: number, best: number, distance: number): Promise<number> {
-    this.show('THE RIFT TOOK YOU', reason, `ENERGY ${energy} · BEST FLOW x${best} · ${Math.round(distance)} m`);
+  runOver(reason: string, energy: number, bestFlow: number, distance: number, stage: number, bestLine: string, record: string): Promise<number> {
+    this.show(record || 'THE RIFT TOOK YOU', reason, bestLine);
     this.cards.innerHTML = '';
+    const stats = document.createElement('div');
+    stats.className = 'runstats';
+    stats.innerHTML = [[`${Math.round(distance)} m`, 'DISTANCE'], [`${stage + 1}`, 'STAGE'], [`${energy}`, 'ENERGY'], [`x${bestFlow}`, 'BEST FLOW']]
+      .map(([v, l]) => `<div><b>${v}</b><span>${l}</span></div>`).join('');
+    this.cards.appendChild(stats);
     const el = document.createElement('button');
     el.className = 'card single';
     el.innerHTML = `<span class="icon">↻</span><span class="name">RUN AGAIN</span><span class="desc">SPACE / TAP</span>`;

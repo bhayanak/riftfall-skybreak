@@ -132,6 +132,54 @@ if WHAT & {"player", "all"}:
         if o.type == "MESH":
             for ms in o.material_slots:
                 if ms.material: ms.material.blend_method = "OPAQUE"
+
+    # Runner suit: the base character is a bare mannequin. Split the body polygons by dominant bone into
+    # skin (head/neck) / suit (torso, legs) / accent (gloves, forearms, boots) and give each its own material
+    # (same normal + roughness maps, different base colour). Exports as 3 primitives of one skinned mesh.
+    body = next(o for o in bpy.data.objects if o.type == "MESH"
+                and any(ms.material and "Superhero" in ms.material.name for ms in o.material_slots))
+    me = body.data
+    skin_slot = next(i for i, ms in enumerate(body.material_slots) if ms.material and "Superhero" in ms.material.name)
+    skin_mat = body.material_slots[skin_slot].material
+    gname = {g.index: g.name for g in body.vertex_groups}
+
+    def bone_class(n):
+        l = n.lower()
+        if l in ("head", "neck_01") or l.startswith(("face", "eye", "jaw")): return 0
+        if any(k in l for k in ("hand", "index", "middle", "ring", "pinky", "thumb", "lowerarm", "foot", "ball")): return 2
+        return 1
+
+    vclass = []
+    for v in me.vertices:
+        best = max(v.groups, key=lambda g: g.weight, default=None)
+        vclass.append(bone_class(gname[best.group]) if best else 1)
+
+    def flat_variant(name, rgb, rough):
+        m = skin_mat.copy(); m.name = name
+        nt = m.node_tree
+        bsdf = next(n for n in nt.nodes if n.type == "BSDF_PRINCIPLED")
+        for l in list(nt.links):
+            if l.to_socket == bsdf.inputs["Base Color"]: nt.links.remove(l)
+        bsdf.inputs["Base Color"].default_value = (*rgb, 1.0)
+        for l in list(nt.links):
+            if l.to_socket == bsdf.inputs["Roughness"]: nt.links.remove(l)
+        bsdf.inputs["Roughness"].default_value = rough
+        return m
+
+    suit = flat_variant("MI_Suit", (0.055, 0.075, 0.16), 0.55)       # deep navy
+    accent = flat_variant("MI_Suit_Accent", (0.10, 0.62, 0.66), 0.35)  # teal, matches UI / rift
+    me.materials.append(suit); suit_slot = len(me.materials) - 1
+    me.materials.append(accent); accent_slot = len(me.materials) - 1
+    slot_for = {0: skin_slot, 1: suit_slot, 2: accent_slot}
+    counts = [0, 0, 0]
+    for p in me.polygons:
+        if p.material_index != skin_slot: continue
+        votes = [0, 0, 0]
+        for vi in p.vertices: votes[vclass[vi]] += 1
+        c = max(range(3), key=lambda i: votes[i])
+        p.material_index = slot_for[c]; counts[c] += 1
+    log(f"suit split: skin {counts[0]}  suit {counts[1]}  accent {counts[2]} polys")
+
     export_glb(os.path.join(OUT, "player", "superhero_male.glb"),
                export_animations=False, export_skins=True, export_def_bones=False,
                export_texcoords=True, export_normals=True, export_materials="EXPORT",

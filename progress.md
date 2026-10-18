@@ -17,22 +17,23 @@ Newest entries at the top of each section. Update this file at the end of every 
 | Assets — ambientCG materials | ✅ 26/26 sets @1K-JPG (190 MB) |
 | Assets — Mixamo | ✅ 9 clips downloaded (auto-rigged on our mesh) → retargeted into `player_anims.glb` |
 | Asset pipeline tooling | ✅ `tools/fetch-assets.sh`, `tools/build-assets.mjs`, `tools/fbx2glb.py`, `tools/build-player-anims.py`, `tools/preview-anims.py`, `tools/export-mixamo-mesh.py`, `tools/inspect-fbx.py` |
-| Phase 0 — repo bootstrap | ✅ Vite 7 + TS 5.9 + PlayCanvas 2.23 (`AppBase`, WebGL2), Pages workflow, local git on `main` (4 commits, author `bhayanak`) |
+| Phase 0 — repo bootstrap | ✅ Vite 7 + TS 5.9 + PlayCanvas 2.23 (`AppBase`, WebGL2), Pages workflow, pushed to `bhayanak/riftfall-skybreak` (author `bhayanak`) |
 | Phase 1 — movement prototype | ✅ superseded by v2 — greybox removed |
-| Phase 2 — movement slice | ✅ **v2**: wall-run, grapple (swing + auto-release), slide, auto-vault, air-jump stat, FLOW x1–x5, procedural chunks (11 templates), portal → 3-card upgrades (11 upgrades), Rift collapse wall, checkpoints, run-over/retry |
-| Phase 3 — visual slice | ✅ **v2 (first pass)**: Superhero mesh + 31-clip anim state machine, HDRI skybox + IBL per biome (Sky/Fire/Void), bloom/vignette/grading, fog, Quaternius kit islands + ruins + trees + clouds, gems, emissive portal, Rift shards, speed trail VFX, 15 Kenney SFX — **visual polish pending** (see Known issues) |
-| Phase 4 — procedural runs | ◑ generator + difficulty ramp done; no path validator yet |
-| Phase 5 — content | ◑ 3 biomes cycle with difficulty; no boss |
+| Phase 2 — movement slice | ✅ **v2.1**: wall-run (snaps from 1.1 m), grapple (swing + auto-release, gold-ring targeting + key prompt), slide, ledge vault (level geometry only — props block), double jump by default, air dash that keeps height, FLOW x1–x5, procedural chunks (11 templates, fixed teaching order on stage 0), portal → 3-card upgrades (11, each with a "why"), Rift collapse wall, checkpoints, run-over/retry |
+| Phase 3 — visual slice | ✅ **v2.1**: Superhero mesh in a navy/teal runner suit (material split by bone in Blender) + 31-clip anim state machine, HDRI skybox + IBL per biome, bloom/vignette/grading, fog, kit islands (grass top flush with collider) + solid trees/rocks/ruins off the centre lane, gold coins, emissive portal, Rift shards, speed trail VFX, 15 Kenney SFX, **procedural adaptive music** (pad / bass / FLOW arp / Rift rumble) |
+| Phase 4 — procedural runs | ◑ generator + difficulty ramp + teaching order; no path validator (templates are bounded by construction) |
+| Phase 5 — content | ◑ 3 biomes cycle with difficulty; persistent best run (localStorage); no boss |
 | Phase 6 — web optimisation / CrazyGames | ⬜ |
 
 Raw asset footprint on disk: **~3 GB** in `assets-source/` (git-ignored). Shipped: `public/assets/` = **11 MB** (3 HDR skies 4.8 MB · world kit 3 MB · character 1.2 MB · anims 2 MB · SFX); engine 311 KB gzip.
 
-## Known issues (v2) — next polish pass
-- Island look: kit rock-platforms scale into "flower pots"; slab + grey rim reads boxy. Needs a dedicated island mesh pass (or sculpted underside from 2–3 rocks) and matching the grass colour to the kit's green.
-- Decoration can land on the running lane / in front of the camera (no camera collision for props). Keep decor to island edges, add camera boom collision against decor bounds.
-- No music; SFX only.
+## Known issues (v2.1) — next polish pass
+- Island silhouettes are still simple (one kit platform scaled); needs a sculpted underside pass per biome.
+- Fire / Void biomes reuse the Sky prop set with a tint — no biome-specific dressing yet.
+- Music is procedural (Web Audio) — fine for now; a composed track (O2) can replace it layer by layer.
 - Mobile: untested on a real phone since v2 (touch layout exists).
 - Draw calls ~800 on desktop — fine for now, needs instancing before mobile-low.
+- No path validator: chunk templates are bounded by construction (max gap/rise per template), but nothing asserts it.
 
 ---
 
@@ -93,6 +94,13 @@ Rebuild: `/Applications/Blender.app/Contents/MacOS/Blender -b -P tools/build-pla
 
 ## Session log
 
+### 2026-10-18 (late) — v2.1: play-test fixes, then next-phase slice
+- Play-test feedback (20 min): walked through boulders/trees, player sometimes hidden, blue "coins", dash uncontrollable, no explanation of wall-run/grapple, "+8 % swift" meaningless.
+- Fixes: **props are solid** (`'prop'` colliders from `PROP_BOX` footprints, kept off the 1.6 m centre lane; camera boom collides with them); **vault only triggers on level geometry** — it was hopping onto any obstacle ≤ 1.35 m, which read as "passing through"; coins are gold (`coin.glb` + metallic material, magnet radius 1.8); dash 19 m/s × 0.26 s, keeps vertical velocity, steerable, +lift when falling; double jump default; wall-run snaps from 1.1 m and needs a sideways approach; **How-to card** on first run (H/Esc reopens; pauses), per-chunk hints on stages 0–1, grapple target ring glows gold + `E · GRAPPLE` prompt; upgrades rewritten with a "why" line (Swift removed); stage 0 teaches templates in a fixed order; gentler gaps; Rift starts 3 s after first input and ramps slower.
+- Next-phase slice: **runner suit** (Blender splits body polys by dominant bone → skin / navy suit / teal gloves+boots, 3 primitives, same normal map); **procedural adaptive music** (`Music.ts`: saw pad on Am–F–C–G, bass pulse, arp fades in with FLOW, brown-noise rumble with Rift proximity, tempo rises with stage/FLOW; shares the Sfx AudioContext); **persistent best run** (`Save.ts`, localStorage) with a stats run-over card and record banners; cumulative distance across stages; `M` mutes (saved).
+- Verified headless: prop blocks a run, a jump clears a 1 m bush, jump→dash carries 15 m, how-to card dismisses on Space, music graph attaches after the first key, run-over card shows `NEW DISTANCE RECORD` + save JSON, 0 console errors.
+- Repo: pushed to `bhayanak/riftfall-skybreak`; added `actions/configure-pages@v5` with `enablement: true` so the workflow turns Pages on itself.
+
 ### 2026-10-18 (night) — v2: "make it a game" + repo identity
 - Feedback: greybox was "monotonous and ugly". Pulled Phases 2+3 forward in one push (commit `c984437`): `Assets.ts` registry, `Environment.ts` (HDRI skybox/IBL via `EnvLighting`, `CameraFrame` bloom/vignette/grading, per-biome fog/sun), `Island.ts` (kit-built islands, walls, beams), `WorldGenerator.ts` (seeded 11-template chunk system, gems, grapple anchors, portal, scenery), `Rift.ts` (advancing wall, sinks islands), `Movement.ts` rewrite (wall-run / grapple swing / slide / vault / air jumps / per-run `RunStats`), `PlayerAnimation.ts` (31-clip state machine; **clips must be keyed by `AnimTrack.name`** — asset names contain `.`/`/` which `assignAnimation` treats as paths), `FlowSystem.ts`, `Upgrade.ts` (11 upgrades), `VFX.ts` (pooled emissive sprites), `Sfx.ts` (Web Audio pool), `Overlays.ts` (loading / upgrade cards / run over).
 - Blender: `tools/build-world-kit.py` builds `public/assets/player/superhero_male.glb` (hair merged, 1K JPEG) and 38 world GLBs (JPEG, ≤512 px).
@@ -134,9 +142,9 @@ Rebuild: `/Applications/Blender.app/Contents/MacOS/Blender -b -P tools/build-pla
 ---
 
 ## Blockers / needs from you
-1. **Remote mismatch — do not push yet.** `origin` (`git@github-todo:bhayanak/riftfall-skybreak.git`) currently holds 14 commits of an unrelated project (`morpheus-mcp-server`, `packages/morpheus-server/…`) and shares no history with this repo (`main` is ahead 3 / behind 14). Either (a) that GitHub repo was created from / pointed at the wrong source — empty it or create a fresh `riftfall-skybreak` repo, then `git push -u origin main`; or (b) if that content is intentional, tell me and I'll put this game under a subfolder/branch. I did not fetch, merge, or push anything.
-2. **Play v2** and say what's wrong first: controls feel, difficulty ramp, visuals. Everything tunable is in `TUNING` (movement), `CAM` (camera), `BIOMES` (look), chunk templates (`WorldGenerator.ts`).
-3. Choose music source (O2).
+1. **Play v2.1** (`npm run dev` or the Pages URL once the deploy is green) and list what is still bad: collision, dash control, readability of wall-run/grapple, difficulty ramp, music. Everything tunable is in `TUNING` (movement), `CAM` (camera), `BIOMES` (look), chunk templates (`WorldGenerator.ts`), `Music.ts` (volume/tempo).
+2. GitHub Pages: the workflow now enables Pages itself. If `https://bhayanak.github.io/riftfall-skybreak/` still 404s after a green run, set Settings → Pages → Source = GitHub Actions once.
+3. Music source (O2): keep procedural, or pick a composed track to layer in.
 
 ## Next up
 Visual polish pass on islands (dedicated island silhouette, kit-matched grass, decor off the lane, camera vs props), then a human feel pass → tune. Push once the remote is sorted so a Pages URL exists for phone testing.
