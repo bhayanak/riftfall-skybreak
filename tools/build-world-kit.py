@@ -69,6 +69,19 @@ WORLD = {
 # which outputs get a post-import fix-up
 FLAT_TOP = {"world/island_large.glb": 0.75, "world/island_medium.glb": 0.5}   # rim band depth (model units)
 
+def force_opaque():
+    """Some FBX (the Ruins kit) import with Principled Alpha = 0 -> glTF MASK with alpha 0 -> black in-engine."""
+    for m in bpy.data.materials:
+        if not m.use_nodes: continue
+        for nd in m.node_tree.nodes:
+            if nd.type != "BSDF_PRINCIPLED": continue
+            a = nd.inputs.get("Alpha")
+            if a is None: continue
+            for l in list(a.links): m.node_tree.links.remove(l)
+            a.default_value = 1.0
+        if hasattr(m, "surface_render_method"): m.surface_render_method = "DITHERED"
+        if hasattr(m, "blend_method"): m.blend_method = "OPAQUE"
+
 def flatten_top(band):
     """Pull every vertex within `band` of the top plane up to the top (Blender is Z-up after import), then give
     the whole top a grass material so the walkable surface reads as meadow, not sand."""
@@ -225,6 +238,7 @@ if WHAT & {"world", "all"}:
             import_any(src)
             fix_images(os.path.dirname(os.path.dirname(src)))
             apply_scale_all()
+            force_opaque()
             if rel in FLAT_TOP: flatten_top(FLAT_TOP[rel])
             resize_images(512)
             export_glb(dst, export_animations=False, export_skins=False, export_materials="EXPORT",

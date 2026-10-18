@@ -24,7 +24,7 @@ export interface Checkpoint { index: number; spawn: pc.Vec3; }
 /** A one-time on-screen tip that fires when the player passes z. */
 export interface HintMarker { z: number; text: string; touch: string; shown: boolean; }
 
-type ChunkName = 'hop' | 'stairs' | 'zigzag' | 'dashgap' | 'pillars' | 'descend' | 'bridge' | 'canyon' | 'canyonGap' | 'wallrun' | 'grapple';
+type ChunkName = 'hop' | 'stairs' | 'zigzag' | 'dashgap' | 'pillars' | 'descend' | 'bridge' | 'canyon' | 'canyonGap' | 'wallrun' | 'grapple' | 'crumble' | 'drift';
 
 const CHUNK_HINTS: Partial<Record<ChunkName, [string, string]>> = {
   hop: ['HOLD SPACE FOR A FULL JUMP. LANDED SHORT? YOU GRAB THE LEDGE AND PULL UP', 'HOLD JUMP FOR A FULL JUMP. SHORT? YOU GRAB THE LEDGE'],
@@ -37,6 +37,8 @@ const CHUNK_HINTS: Partial<Record<ChunkName, [string, string]>> = {
   grapple: ['GRAPPLE: WHEN THE RING GLOWS, PRESS E TO SWING. E AGAIN TO LET GO', 'GRAPPLE: WHEN THE RING GLOWS, TAP GRAPPLE TO SWING'],
   pillars: ['SHORT HOPS — KEEP YOUR SPEED', 'SHORT HOPS — KEEP YOUR SPEED'],
   descend: ['DROP DOWN — JUMP OFF THE EDGE, SPACE AGAIN MID-AIR IF SHORT', 'DROP DOWN — JUMP OFF THE EDGE, JUMP AGAIN IF SHORT'],
+  crumble: ['GLOWING GROUND GIVES WAY — DO NOT STOP', 'GLOWING GROUND GIVES WAY — DO NOT STOP'],
+  drift: ['DRIFTING ISLAND — TIME YOUR JUMP', 'DRIFTING ISLAND — TIME YOUR JUMP'],
 };
 
 /** One hop of the route as seen by the validator. */
@@ -45,7 +47,7 @@ export interface RouteEdge { from: number; to: number; d: number; h: number; mov
 /** Intended way across for each template, used by the validator as the ceiling a gap may demand. */
 const INTENDED: Record<ChunkName, Move | 'wall' | 'grapple'> = {
   hop: 'jump', stairs: 'jump', zigzag: 'jump', dashgap: 'dash', pillars: 'jump', descend: 'jump', bridge: 'run',
-  canyon: 'jump', canyonGap: 'wall', wallrun: 'wall', grapple: 'grapple',
+  canyon: 'jump', canyonGap: 'wall', wallrun: 'wall', grapple: 'grapple', crumble: 'jump', drift: 'jump',
 };
 
 interface Cursor { x: number; y: number; z: number; }
@@ -75,6 +77,7 @@ export class WorldGenerator {
   private via = new Map<Island, 'wall' | 'grapple'>();
   /** Chunk each island belongs to (for the validator's intended-move ceiling). */
   private chunkOf = new Map<Island, ChunkName>();
+  private stage = 0;
   lastReport: RouteEdge[] = [];
 
   constructor(app: pc.AppBase, private assets: Assets, world: CollisionWorld) {
@@ -91,6 +94,7 @@ export class WorldGenerator {
     this.hints.length = 0;
     this.via.clear();
     this.chunkOf.clear();
+    this.stage = stage;
     this.builder.setBiome(biome);
     this.coinMat = coinMaterial();
     this.anchorMat = emissive(biome.rift, 1.2);
@@ -230,7 +234,7 @@ export class WorldGenerator {
 
   /** After the Rift is pushed back (respawn), bring back every island that is now ahead of it. */
   restoreAhead(riftZ: number): void {
-    for (const isl of this.builder.islands) if (isl.falling > 0 && isl.z <= riftZ - 6) this.builder.restore(isl);
+    for (const isl of this.builder.islands) if ((isl.falling > 0 || isl.sinkY !== undefined) && isl.z <= riftZ - 6) this.builder.restore(isl);
   }
 
   /** Lowest walkable surface in the route (for a kill plane that follows descending chunks). */
@@ -249,6 +253,23 @@ export class WorldGenerator {
     return null;
   }
 
+  /** Island that owns a collider (null for walls/props not on an island). */
+  islandOf(box: BoxCollider | null): Island | null {
+    if (!box) return null;
+    for (const isl of this.builder.islands) if (isl.colliders.includes(box)) return isl;
+    return null;
+  }
+
+  /** The n-th route island ahead of the player (route order == creation order). */
+  islandAhead(pos: pc.Vec3, n = 1): Island | null {
+    const isl = this.builder.islands;
+    let i = isl.findIndex((it) => it.z - it.d / 2 <= pos.z && it.z + it.d / 2 >= pos.z);
+    if (i < 0) i = isl.findIndex((it) => it.z + it.d / 2 < pos.z);   // in a gap: first island ahead
+    else i += 1;
+    const target = isl[Math.min(isl.length - 2, i + n - 1)];       // never the portal island
+    return target && target.falling <= 0 ? target : null;
+  }
+
   // ----------------------------------------------------------------------------- chunk templates
   private chunk(name: ChunkName, cur: Cursor, d: number): void {
     switch (name) {
@@ -263,6 +284,8 @@ export class WorldGenerator {
       case 'canyonGap': return this.canyonGap(cur, d);
       case 'wallrun': return this.wallrun(cur, d);
       case 'grapple': return this.grapple(cur, d);
+      case 'crumble': return this.crumble(cur, d);
+      case 'drift': return this.drift(cur, d);
     }
   }
 
@@ -273,8 +296,8 @@ export class WorldGenerator {
       return teach.slice(0, n);
     }
     const easy: ChunkName[] = ['hop', 'stairs', 'zigzag', 'bridge', 'pillars'];
-    const mid: ChunkName[] = ['dashgap', 'canyon', 'grapple', 'descend'];
-    const hard: ChunkName[] = ['wallrun', 'grapple', 'dashgap', 'canyonGap'];
+    const mid: ChunkName[] = ['dashgap', 'canyon', 'grapple', 'descend', 'crumble', 'drift'];
+    const hard: ChunkName[] = ['wallrun', 'grapple', 'dashgap', 'canyonGap', 'crumble'];
     const out: ChunkName[] = ['hop', 'stairs'];
     let last: ChunkName = 'stairs';
     for (let i = 2; i < n; i++) {
@@ -339,7 +362,7 @@ export class WorldGenerator {
 
   /** gap that stays inside what `move` can cross for this rise/drop (with a lateral component already decided) */
   private fit(move: Move, want: number, h: number, lateral = 0): number {
-    const cap = Math.sqrt(Math.max(1, maxGap(move, h) ** 2 - lateral * lateral));
+    const cap = Math.sqrt(Math.max(1, maxGap(move, h) ** 2 - lateral * lateral)) * 0.97;
     return Math.max(1.5, Math.min(want, cap));
   }
 
@@ -347,7 +370,9 @@ export class WorldGenerator {
     const g = this.fit('jump', 3.5 + Math.min(2.5, d * 1.0), 0);
     this.gemsLine(cur.x, cur.y, cur.z, cur.x, cur.y, cur.z - g, 3, 1.2);
     this.gap(cur, g);
-    this.isl(cur, 8 + this.rng.int(3), 8, { ruins: this.rng.chance(0.4) });
+    const isl = this.isl(cur, 8 + this.rng.int(3), 8, { ruins: this.rng.chance(0.4) });
+    // Island Fracture: from the second stage some plain islands give way under you
+    if (this.stage >= 1 && this.rng.chance(0.25)) this.builder.markCrumble(isl);
   }
 
   protected stairs(cur: Cursor, d: number): void {
@@ -479,6 +504,33 @@ export class WorldGenerator {
     this.gemsLine(cur.x, cur.y, z0, cur.x, cur.y, z0 - g, 5, 3.5);
     this.gap(cur, g);
     this.via.set(this.isl(cur, 9, 8, { ruins: true }), 'grapple');
+  }
+
+  /** three small islands that give way shortly after you land: keep moving */
+  protected crumble(cur: Cursor, d: number): void {
+    for (let i = 0; i < 3; i++) {
+      const dx = (this.rng.float() - 0.5) * 2.0;
+      const g = this.fit('jump', 3.2 + Math.min(1.5, d), 0, dx);
+      this.gemsLine(cur.x, cur.y, cur.z, cur.x + dx, cur.y, cur.z - g, 2, 1);
+      cur.x += dx; this.gap(cur, g);
+      this.builder.markCrumble(this.isl(cur, 4.5, 4.5, { decor: 0 }));
+    }
+    const back = Math.abs(cur.x);
+    cur.x = 0;
+    this.gap(cur, this.fit('jump', 3.5, 0, back));
+    this.isl(cur, 8, 7);
+  }
+
+  /** one island sliding side to side; gaps sized for its far extreme */
+  protected drift(cur: Cursor, d: number): void {
+    const amp = 2.5 + Math.min(1.5, d);
+    const g = this.fit('jump', 3.5 + Math.min(1.5, d), 0, amp);
+    this.gemsLine(cur.x, cur.y, cur.z, cur.x, cur.y, cur.z - g, 2, 1.2);
+    this.gap(cur, g);
+    const isl = this.isl(cur, 6, 6, { decor: 0 });
+    this.builder.setMotion(isl, amp, 3.2 + this.rng.float());
+    this.gap(cur, this.fit('jump', 3.5 + Math.min(1.5, d), 0, amp));
+    this.isl(cur, 8, 7, { ruins: this.rng.chance(0.5) });
   }
 
   // ------------------------------------------------------------------------------------ portal

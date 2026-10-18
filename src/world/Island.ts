@@ -25,6 +25,12 @@ export interface Island {
   w: number;
   d: number;
   falling: number; // seconds since the Rift took it (0 = intact)
+  /** side-to-side drift (moving platform); x is the rest position */
+  motion?: { amp: number; period: number; phase: number; offset: number; delta: number };
+  /** gives way shortly after being stepped on; timer < 0 = armed and counting */
+  crumble?: { armed: boolean; timer: number };
+  /** Titan slam: sinking slowly (m so far); colliders follow so a quick player can still use it */
+  sinkY?: number;
 }
 
 /** Kit platforms re-exported with the rim pulled flat, so the whole bounding footprint is walkable. */
@@ -32,8 +38,16 @@ const PLATFORM_MODELS: { key: WorldModel; w: number; h: number; d: number }[] = 
   { key: 'island_large', w: 7.38, h: 3.63, d: 5.16 },
   { key: 'island_medium', w: 4.81, h: 2.91, d: 4.81 },
 ];
-const TREES: WorldModel[] = ['tree', 'tree_fruit', 'pine_1', 'pine_3', 'common_tree_2'];
-const SMALL: WorldModel[] = ['bush', 'grass_1', 'grass_2', 'rock_1', 'rock_2', 'grass_1', 'grass_2'];
+const TREE_SETS: Record<string, WorldModel[]> = {
+  sky: ['tree', 'tree_fruit', 'pine_1', 'pine_3', 'common_tree_2'],
+  fire: ['dead_tree_2', 'dead_tree_2', 'rock_medium_1', 'rock_medium_3'],
+  void: ['ruin_column_round', 'rock_medium_2', 'ruin_statue_stag'],
+};
+const SMALL_SETS: Record<string, WorldModel[]> = {
+  sky: ['bush', 'grass_1', 'grass_2', 'rock_1', 'rock_2', 'grass_1', 'grass_2'],
+  fire: ['rock_1', 'rock_2', 'rock_1', 'ruin_column_short'],
+  void: ['rock_2', 'ruin_column_short', 'rock_1'],
+};
 const RUINS: WorldModel[] = ['ruin_column_round', 'ruin_column_short', 'ruin_wall_broken', 'ruin_wall_overgrown', 'ruin_arch_round', 'ruin_statue_stag', 'ruin_wall_arch_broken'];
 /**
  * Per prop: `solid` = collision footprint (w, h, d at scale 1; trunk for trees), `visual` = full mesh bounds used to
@@ -45,6 +59,8 @@ const PROPS: Partial<Record<WorldModel, { solid?: [number, number, number]; visu
   common_tree_2: { solid: [1.0, 7.5, 1.0], visual: [4.9, 7.4, 4.9] },
   bush: { solid: [3.0, 2.0, 3.0], visual: [3.6, 2.3, 3.6] },
   rock_1: { solid: [1.5, 1.0, 1.4], visual: [1.7, 1.1, 1.5] }, rock_2: { solid: [1.6, 1.9, 1.5], visual: [1.8, 2.0, 1.5] },
+  rock_medium_1: { solid: [3.0, 2.2, 2.8], visual: [3.3, 2.3, 3.0] }, rock_medium_2: { solid: [2.8, 1.9, 2.4], visual: [3.1, 2.0, 2.5] },
+  rock_medium_3: { solid: [3.2, 2.3, 3.2], visual: [3.5, 2.4, 3.5] }, dead_tree_2: { solid: [0.9, 6.5, 0.9], visual: [6.8, 11.5, 6.4] },
   grass_1: { visual: [0.6, 0.5, 0.5] }, grass_2: { visual: [1.1, 0.7, 0.5] },
   ruin_column_round: { solid: [0.7, 4.0, 0.7], visual: [0.7, 4.0, 0.7] }, ruin_column_short: { solid: [0.5, 1.8, 0.5], visual: [0.5, 1.8, 0.5] },
   ruin_wall_broken: { solid: [2.0, 2.0, 0.4], visual: [2.0, 2.0, 0.4] }, ruin_wall_overgrown: { solid: [2.0, 2.0, 0.4], visual: [2.0, 2.0, 0.4] },
@@ -65,6 +81,10 @@ export class IslandBuilder {
   private wallMat!: pc.StandardMaterial;
   private tintCache = new Map<string, pc.Material>();
   private biomeTint: pc.Color | null = null;
+  private trees: WorldModel[] = TREE_SETS.sky;
+  private small: WorldModel[] = SMALL_SETS.sky;
+  private crumbleMat!: pc.StandardMaterial;
+  private t = 0;
 
   constructor(app: pc.AppBase, private assets: Assets, private world: CollisionWorld, public rng: Rng) {
     app.root.addChild(this.root);
@@ -72,9 +92,12 @@ export class IslandBuilder {
 
   setBiome(b: Biome): void {
     this.wallMat = flat(b.stone.clone().mulScalar(0.9), 0.2);
+    this.crumbleMat = emissive(b.rift, 0.6);
     this.tintCache.clear();
     // the kit is authored for a sunny sky; other biomes pull vegetation/rock toward the biome palette
     this.biomeTint = b.id === 'sky' ? null : b.stone;
+    this.trees = TREE_SETS[b.id] ?? TREE_SETS.sky;
+    this.small = SMALL_SETS[b.id] ?? SMALL_SETS.sky;
   }
 
   clear(): void {
@@ -197,9 +220,34 @@ export class IslandBuilder {
     }
   }
 
-  /** Advance "falling" islands taken by the Rift. */
+  /** Advance "falling" islands taken by the Rift, drifting islands, and armed crumble timers. */
   update(dt: number): void {
+    this.t += dt;
     for (const isl of this.islands) {
+      if (isl.motion && isl.falling <= 0) {
+        const mo = isl.motion;
+        const next = Math.sin((this.t / mo.period) * Math.PI * 2 + mo.phase) * mo.amp;
+        mo.delta = next - mo.offset;
+        mo.offset = next;
+        isl.root.setPosition(isl.x + next, isl.top, isl.z);
+        for (const c of isl.colliders) c.center.x += mo.delta;
+        for (const c of isl.occluders) c.center.x += mo.delta;
+      }
+      if (isl.crumble?.armed && isl.falling <= 0) {
+        isl.crumble.timer -= dt;
+        const shake = Math.max(0, 0.9 - isl.crumble.timer) * 0.06;
+        isl.root.setEulerAngles(Math.sin(this.t * 40) * shake * 30, 0, Math.cos(this.t * 37) * shake * 30);
+        if (isl.crumble.timer <= 0) this.sink(isl);
+      }
+      if (isl.sinkY !== undefined && isl.falling <= 0) {
+        const step = (0.8 + isl.sinkY * 0.5) * dt;
+        isl.sinkY += step;
+        for (const c of isl.colliders) c.center.y -= step;
+        for (const c of isl.occluders) c.center.y -= step;
+        isl.root.setPosition(isl.x + (isl.motion?.offset ?? 0), isl.top - isl.sinkY, isl.z);
+        isl.root.setEulerAngles(Math.sin(this.t * 2) * isl.sinkY * 2, 0, isl.sinkY * 3);
+        if (isl.sinkY > 6) this.sink(isl);
+      }
       if (isl.falling <= 0) continue;
       isl.falling += dt;
       const t = isl.falling;
@@ -210,9 +258,56 @@ export class IslandBuilder {
     }
   }
 
+  /** Horizontal carry for something standing on `box` this frame (moving islands), else 0. */
+  carry(box: BoxCollider | null): number {
+    if (!box) return 0;
+    for (const isl of this.islands) if (isl.motion && isl.colliders.includes(box)) return isl.motion.delta;
+    return 0;
+  }
+
+  setMotion(isl: Island, amp: number, period: number): void {
+    isl.motion = { amp, period, phase: this.rng.float() * Math.PI * 2, offset: 0, delta: 0 };
+  }
+
+  /** Mark an island as fractured: it gives way ~0.9 s after being stepped on. Tinted so it can be read. */
+  markCrumble(isl: Island): void {
+    isl.crumble = { armed: false, timer: 0.9 };
+    const body = isl.root.children[0] as pc.Entity | undefined;
+    if (body) {
+      for (const r of body.findComponents('render') as pc.RenderComponent[]) {
+        for (const mi of r.meshInstances) {
+          if (!mi.material) continue;
+          const sm = (mi.material as pc.StandardMaterial).clone();
+          sm.emissive = this.crumbleMat.emissive;
+          sm.emissiveIntensity = 0.35;
+          sm.update();
+          mi.material = sm;
+        }
+      }
+    }
+  }
+
+  /** Called when the player lands on an island; starts the crumble clock. Returns true if it just armed. */
+  stepOn(isl: Island): boolean {
+    if (!isl.crumble || isl.crumble.armed) return false;
+    isl.crumble.armed = true;
+    return true;
+  }
+
+  /** Titan slam: start sinking slowly. */
+  slam(isl: Island): void {
+    if (isl.falling > 0 || isl.sinkY !== undefined) return;
+    isl.sinkY = 0;
+  }
+
   sink(isl: Island): void {
     if (isl.falling > 0) return;
     isl.falling = 0.001;
+    if (isl.sinkY !== undefined) {
+      for (const c of isl.colliders) c.center.y += isl.sinkY;
+      for (const c of isl.occluders) c.center.y += isl.sinkY;
+      isl.sinkY = undefined;
+    }
     for (const c of isl.colliders) {
       const i = this.world.boxes.indexOf(c);
       if (i >= 0) this.world.boxes.splice(i, 1);
@@ -225,11 +320,17 @@ export class IslandBuilder {
 
   /** Undo sink(): used when the Rift is pushed back behind a checkpoint on respawn. */
   restore(isl: Island): void {
-    if (isl.falling <= 0) return;
+    if (isl.falling <= 0 && isl.sinkY === undefined) return;
+    if (isl.sinkY !== undefined) {
+      for (const c of isl.colliders) c.center.y += isl.sinkY;
+      for (const c of isl.occluders) c.center.y += isl.sinkY;
+      isl.sinkY = undefined;
+    }
     isl.falling = 0;
     isl.root.enabled = true;
-    isl.root.setPosition(isl.x, isl.top, isl.z);
+    isl.root.setPosition(isl.x + (isl.motion?.offset ?? 0), isl.top, isl.z);
     isl.root.setEulerAngles(0, 0, 0);
+    if (isl.crumble) { isl.crumble.armed = false; isl.crumble.timer = 0.9; }
     for (const c of isl.colliders) if (!this.world.boxes.includes(c)) this.world.boxes.push(c);
     for (const c of isl.occluders) if (!this.world.occluders.includes(c)) this.world.occluders.push(c);
   }
@@ -267,9 +368,9 @@ export class IslandBuilder {
         return;
       }
     };
-    for (let i = 0; i < nTrees; i++) place(this.rng.pick(TREES), 0.5 + this.rng.float() * 0.35);
+    for (let i = 0; i < nTrees; i++) place(this.rng.pick(this.trees), 0.5 + this.rng.float() * 0.35);
     for (let i = 0; i < nSmall; i++) {
-      const key = this.rng.pick(SMALL);
+      const key = this.rng.pick(this.small);
       place(key, key === 'bush' ? 0.4 + this.rng.float() * 0.3 : 0.7 + this.rng.float() * 0.5);
     }
   }

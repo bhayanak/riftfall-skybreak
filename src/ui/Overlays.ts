@@ -42,11 +42,13 @@ export class Overlays {
     this.show('RIFTFALL', 'HOW TO PLAY', touch ? 'TAP TO START' : 'PRESS SPACE TO START · H ANYTIME FOR THIS CARD');
     this.cards.innerHTML = '';
     const rows: [string, string, string][] = touch
-      ? [['◉', 'MOVE', 'Left stick. Drag right side to look.'], ['JUMP', 'JUMP ×2', 'Tap again in the air for a second jump.'],
+      ? [['◉', 'MOVE', 'Left stick. Drag right side to look.'], ['JUMP', 'JUMP ×2', 'Hold for a full jump. Tap again in the air for a second jump.'],
+         ['LEDGE', 'GRAB', 'Land short? You grab the ledge and pull up. Glowing islands give way — keep moving.'],
          ['DASH', 'AIR DASH', 'Tap mid-jump to cross big gaps.'], ['GRAPPLE', 'GRAPPLE', 'When a ring glows gold, tap to swing. Tap again to let go.'],
          ['WALL', 'WALL-RUN', 'Jump towards a wall while moving. Jump again to leap off.'], ['SLIDE', 'SLIDE', 'Slide while sprinting for a burst of speed.'],
          ['▲', 'THE RIFT', 'It chases you. Keep moving forward. Reach the portal.']]
-      : [['WASD', 'MOVE', 'Mouse to look (click once to capture).'], ['SPACE', 'JUMP ×2', 'Press again in the air for a second jump.'],
+      : [['WASD', 'MOVE', 'Mouse to look (click once to capture).'], ['SPACE', 'JUMP ×2', 'Hold for a full jump. Press again in the air for a second jump.'],
+         ['LEDGE', 'GRAB', 'Land short? You grab the ledge and pull up. Glowing islands give way — keep moving.'],
          ['SHIFT', 'AIR DASH', 'Press mid-jump to cross big gaps.'], ['E', 'GRAPPLE', 'When a ring glows gold, press E to swing. E again to let go.'],
          ['SPACE', 'WALL-RUN', 'Jump towards a wall while moving. Space again to leap off.'], ['C', 'SLIDE', 'Slide while sprinting for a burst of speed.'],
          ['▲', 'THE RIFT', 'It chases you. Keep moving forward. Reach the portal.'], ['M', 'SOUND', 'Toggle music and effects. R restarts the run.']];

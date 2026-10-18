@@ -1,6 +1,6 @@
 import * as pc from 'playcanvas';
 import type { Input } from '../core/Input';
-import { CollisionWorld, type Contact } from '../world/Colliders';
+import { CollisionWorld, type BoxCollider, type Contact } from '../world/Colliders';
 
 export type MoveState = 'ground' | 'air' | 'dash' | 'wallrun' | 'slide' | 'grapple' | 'vault';
 
@@ -88,6 +88,8 @@ export class Movement {
   state: MoveState = 'air';
   grounded = false;
   groundNormal = new pc.Vec3(0, 1, 0);
+  /** Collider we are standing on this frame (null in the air). */
+  groundBox: BoxCollider | null = null;
   wallContact: Contact | null = null;
   /** -1 wall on left, +1 wall on right (valid while wall-running). */
   wallSide = 0;
@@ -339,7 +341,7 @@ export class Movement {
         const n = ct.normal;
         const vn = this.velocity.dot(n);
         if (vn < 0 && this.state !== 'wallrun') { this.velocity.x -= n.x * vn; this.velocity.y -= n.y * vn; this.velocity.z -= n.z * vn; }
-        if (n.y > 0.65) { groundedNow = true; this.groundNormal.copy(n); }
+        if (n.y > 0.65) { groundedNow = true; this.groundNormal.copy(n); this.groundBox = ct.collider; }
         else if (Math.abs(n.y) < 0.35) this.wallContact = ct;
         if (n.y < 0.65 && n.y > -0.2 && ct.collider.tag === 'ground' && !wasGrounded) ledge = ct;
       }
@@ -348,8 +350,9 @@ export class Movement {
     if (!groundedNow && wasGrounded && this.velocity.y <= 0.01 && this.state !== 'wallrun' && this.state !== 'grapple') {
       _tmp.set(this.position.x, this.position.y + 0.05, this.position.z);
       const hit = this.world.raycastDown(_tmp, 0.15);
-      if (hit) { groundedNow = true; this.position.y -= hit.dist - 0.05; this.velocity.y = 0; }
+      if (hit) { groundedNow = true; this.position.y -= hit.dist - 0.05; this.velocity.y = 0; this.groundBox = hit.box; }
     }
+    if (!groundedNow) this.groundBox = null;
 
     // --- vault: low ledge ahead while moving on the ground -> hop onto it (level geometry only; props block) --
     if (groundedNow && this.wallContact && this.wallContact.collider.tag === 'ground' && this.speedXZ > 3 && this.state !== 'slide') {
@@ -389,6 +392,7 @@ export class Movement {
           this.velocity.x = -nx * sp; this.velocity.z = -nz * sp;
           this.state = 'vault'; this.vaultTimer = 0.2;
           groundedNow = true;
+          this.groundBox = ledge.collider;
           this.events.push('vault');
         }
       }

@@ -150,30 +150,31 @@ Budget gate (CI fails if exceeded): **boot bundle ≤ 20 MB**, any single GLB �
 - **Exit:** boot bundle < 20 MB ✅ (11 MB assets + 354 KB gzip engine); showable clip ⏳
 
 ### Phase 4 — Procedural runs  ◑
-- [x] 11 chunk templates, difficulty curve by stage + chunk index, teaching order on stage 0
-- [ ] 30+ chunks, connector rules
-- [ ] 1 world event (Island Fracture) + Portal Collapse escape
-- [x] 11 upgrades; run seed — [ ] daily seed
-- [x] Persistent best run (localStorage)
-- **Exit:** 10 consecutive generated runs with no dead ends / impossible gaps (automated path validator).
+- [x] 13 chunk templates (incl. `crumble`, `drift`), difficulty curve by stage + chunk index, teaching order on stage 0
+- [x] **Movement envelope + route validator** (`Envelope.ts`; every gap sized from `TUNING`; `violations()` in dev) — bot-verified with tap-only jumps
+- [ ] 30+ chunks, connector rules (split paths)
+- [x] Island Fracture event (crumbling islands from stage 1); [ ] Portal Collapse escape
+- [x] 11 upgrades; run seed (`?seed=`); daily seed (`?daily`)
+- [x] Persistent best run (localStorage / CrazyGames data)
+- **Exit:** 10 consecutive generated runs with no dead ends / impossible gaps ✅ (30 routes, 0 violations after the `fit()` margin)
 
 ### Phase 5 — Content  ◑
-- [x] Fire Rift / Void biomes: HDRI, fog, tint, Rift colour — [ ] lava/ice dressing, ash particles, meteor / gravity events
-- [ ] First boss: Rift Titan (Ultimate Monsters) — route destruction, not combat
+- [x] Fire Rift / Void biomes: HDRI, fog, tint, Rift colour, per-biome prop sets, ambient embers / motes — [ ] lava/ice island bodies, meteor / gravity events
+- [x] First boss: **Rift Titan** from stage 3 — route destruction (telegraphed slams sink islands), not combat; [ ] Ultimate Monsters model instead of the shard construct
 - [x] Mixamo gap animations retargeted (wall-run, swing, hard landing, vault, flip, dive roll)
 - [ ] Cosmetics unlocks (hair, suit colours, trail colours); [x] adaptive music layers (procedural)
 
-### Phase 6 — Web optimisation + CrazyGames
-- [ ] CrazyGames HTML5 SDK: init, ad breaks at portal, `happytime()`, save via SDK data module
-- [ ] Quality profiles (Mobile Low/High, Desktop) auto-picked by `Device.ts`
-- [ ] Lighthouse-style budget report in CI; streaming of Fire/Void/cosmetics bundles
+### Phase 6 — Web optimisation + CrazyGames  ◑
+- [x] CrazyGames HTML5 SDK v3 scaffold: init on CG host (or `?cg`), loading/gameplay signals, `happytime()`, mid-game ad break every 3rd portal, SDK data save — no-op elsewhere
+- [x] Quality profiles (Mobile Low/High, Desktop) auto-picked by `Device.ts` (shadows, post, VFX budget, pixel ratio)
+- [ ] Instancing for props/coins; Lighthouse-style budget report in CI; streaming of Fire/Void/cosmetics bundles
 - **Exit:** CrazyGames QA pass; mobile-homepage eligibility checklist green.
 
 ---
 
 ## 4. Immediate next actions (ordered)
 
-1. **You:** play v2.1 and report what is still bad (collision, dash, wall-run/grapple readability, ramp, music).
-2. **Me (Phase 4):** path validator (walk each generated route with the movement envelope, assert reachability), more templates (split-path, moving island, collapsing bridge), Island Fracture event, daily seed.
-3. **Me (Phase 5):** Fire/Void dressing (lava/ice props + ash/ember particles), Rift Titan route-destruction boss on stage 3, suit colour unlocks.
-4. **Me (Phase 6):** quality profiles + instancing for mobile, CrazyGames SDK scaffold (init, ad break at portal, `happytime`, SDK save).
+1. **You:** play v2.3 (`?seed=N` to replay a route, `?daily`); report the specific edge/feel that is still wrong, and whether the Titan cadence is fair.
+2. **Me (Phase 4):** split-path templates + connector rules; Portal Collapse escape; wall-run leap-off in the bot.
+3. **Me (Phase 5):** lava / ice island bodies, Titan from the Ultimate Monsters pack, suit colour unlocks by best stage.
+4. **Me (Phase 6):** hardware instancing for props/coins, real-phone pass, CrazyGames QA checklist.

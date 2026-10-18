@@ -50,6 +50,20 @@ export class VFX {
     }
   }
 
+  private ambientAcc = 0;
+  /** Biome air: embers rising in the Fire Rift, slow motes drifting in the Void, a few dust specks in the sky. */
+  ambient(dt: number, around: pc.Vec3, biome: string): void {
+    const rate = biome === 'fire' ? 14 : biome === 'void' ? 9 : 3;
+    this.ambientAcc += dt * rate;
+    while (this.ambientAcc >= 1) {
+      this.ambientAcc -= 1;
+      const p = new pc.Vec3(around.x + (Math.random() - 0.5) * 30, around.y - 4 + Math.random() * 10, around.z - 10 - Math.random() * 30);
+      if (biome === 'fire') this.emit(p, 1, 0.8, 0.14, 2.2, 0, 1.6);
+      else if (biome === 'void') this.emit(p, 1, 0.5, 0.18, 3.0, 0.1, 0.3);
+      else this.emit(p, 1, 0.3, 0.08, 2.5, 0, 0.2);
+    }
+  }
+
   update(dt: number): void {
     for (const p of this.pool) {
       if (!p.e.enabled) continue;

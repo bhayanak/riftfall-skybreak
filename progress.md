@@ -19,21 +19,21 @@ Newest entries at the top of each section. Update this file at the end of every 
 | Asset pipeline tooling | ✅ `tools/fetch-assets.sh`, `tools/build-assets.mjs`, `tools/fbx2glb.py`, `tools/build-player-anims.py`, `tools/preview-anims.py`, `tools/export-mixamo-mesh.py`, `tools/inspect-fbx.py` |
 | Phase 0 — repo bootstrap | ✅ Vite 7 + TS 5.9 + PlayCanvas 2.23 (`AppBase`, WebGL2), Pages workflow, pushed to `bhayanak/riftfall-skybreak` (author `bhayanak`) |
 | Phase 1 — movement prototype | ✅ superseded by v2 — greybox removed |
-| Phase 2 — movement slice | ✅ **v2.1**: wall-run (snaps from 1.1 m), grapple (swing + auto-release, gold-ring targeting + key prompt), slide, ledge vault (level geometry only — props block), double jump by default, air dash that keeps height, FLOW x1–x5, procedural chunks (11 templates, fixed teaching order on stage 0), portal → 3-card upgrades (11, each with a "why"), Rift collapse wall, checkpoints, run-over/retry |
-| Phase 3 — visual slice | ✅ **v2.1**: Superhero mesh in a navy/teal runner suit (material split by bone in Blender) + 31-clip anim state machine, HDRI skybox + IBL per biome, bloom/vignette/grading, fog, kit islands (grass top flush with collider) + solid trees/rocks/ruins off the centre lane, gold coins, emissive portal, Rift shards, speed trail VFX, 15 Kenney SFX, **procedural adaptive music** (pad / bass / FLOW arp / Rift rumble) |
-| Phase 4 — procedural runs | ◑ generator + difficulty ramp + teaching order; no path validator (templates are bounded by construction) |
-| Phase 5 — content | ◑ 3 biomes cycle with difficulty; persistent best run (localStorage); no boss |
-| Phase 6 — web optimisation / CrazyGames | ⬜ |
+| Phase 2 — movement slice | ✅ **v2.3**: wall-run (tangential speed, knee probe), grapple (reel-in, peak-release), slide, **air mantle / ledge grab**, double jump, height-keeping air dash, FLOW, 13 chunk templates, portal → upgrades, Rift wall, checkpoints, run-over with records |
+| Phase 3 — visual slice | ✅ **v2.3**: runner suit, 31-clip anim, HDRI/IBL per biome, post, flat-topped grass islands, rim-only decoration with visual-bounds lane clearance, camera occluders, gold coins, portal, SFX + procedural music, biome ambient particles (embers / motes / dust), ruins fixed (were black) |
+| Phase 4 — procedural runs | ◑ **Envelope + route validator** (every gap sized from TUNING; `violations()` logged in dev), teaching order, `crumble` + `drift` templates, Island Fracture (stage ≥ 1), `?seed=` and `?daily` seeds. Not yet: 30+ templates, connector rules |
+| Phase 5 — content | ◑ per-biome prop sets (Sky / Fire / Void), **Rift Titan** from stage 3 (telegraphed island slams), persistent best run. Not yet: lava/ice props, cosmetics, composed music |
+| Phase 6 — web optimisation / CrazyGames | ◑ `Platform.ts` (SDK v3: loading/gameplay/happytime, mid-game ad at every 3rd portal, SDK data save; no-op elsewhere; `?cg` to test). Not yet: instancing, budget CI |
 
 Raw asset footprint on disk: **~3 GB** in `assets-source/` (git-ignored). Shipped: `public/assets/` = **11 MB** (3 HDR skies 4.8 MB · world kit 3 MB · character 1.2 MB · anims 2 MB · SFX); engine 311 KB gzip.
 
-## Known issues (v2.1) — next polish pass
-- Island silhouettes are still simple (one kit platform scaled); needs a sculpted underside pass per biome.
-- Fire / Void biomes reuse the Sky prop set with a tint — no biome-specific dressing yet.
-- Music is procedural (Web Audio) — fine for now; a composed track (O2) can replace it layer by layer.
-- Mobile: untested on a real phone since v2 (touch layout exists).
-- Draw calls ~800 on desktop — fine for now, needs instancing before mobile-low.
-- No path validator: chunk templates are bounded by construction (max gap/rise per template), but nothing asserts it.
+## Known issues (v2.3) — next pass
+- Wall-run edges are validated by a bot that never leaps off (7/8 pass); a leap-off at the wall's end is the intended line and not yet auto-tested.
+- Fire / Void reuse Sky island bodies with a tint; dedicated lava / ice bodies still to do.
+- Titan is a shard-and-eye construct, not the Ultimate Monsters model yet; slam cadence (7–11 s) untuned by a human.
+- Music is procedural (Web Audio); composed track (O2) still open.
+- Mobile: untested on a real phone since v2; draw calls ~700 desktop, needs instancing before mobile-low.
+- Moving islands carry the player horizontally only; standing on one while it reverses direction can feel slidey.
 
 ---
 
@@ -94,6 +94,17 @@ Rebuild: `/Applications/Blender.app/Contents/MacOS/Blender -b -P tools/build-pla
 
 ## Session log
 
+### 2026-10-18 (late, part 2) — v2.2 / v2.3: provable jumps, visibility, next phases
+- Feedback: "many jumps not doable", "player hidden behind/inside boulders/rocks/plants". Measured instead of guessing:
+  - A **tapped** jump (cut 0.5) reached 4.8 m vs 7.6 m held; zigzag asked for 5.7–6.5 m diagonals and stairs for +1.4 m rises — impossible on a tap. The ground vault tested the *post-collision* velocity and never fired.
+  - Kit platforms' flat top was only 80 % × 67 % of their bounds → the collider overhung the visible grass by up to 1.3 m; bushes were 3.5 m wide (not 2.4); twisted tree 13 m wide; clouds spawned through the corridor; the camera boom only tested thin trunk colliders, not canopies or island bodies (2–7 m thick below a 1.2 m slab) → camera inside rock when descending.
+- `Envelope.ts`: analytic reach per move from `TUNING` (hold 0.8, mantle 0.65 relied on); generator `fit()` clamps every gap; `validate()`/`violations()`; `INTENDED` ceiling per template. **Bot test: 123/123 non-wall edges with tap-only jumps across 6 routes to stage 3**, 21/21 on a route with crumble + drift, 7/8 wall edges with no leap-off.
+- Movement: air mantle (side/corner contact of 'ground' within 1.5 m of its top → pull up, 0.2 s vault), jump cut 0.62, grapple reel-in 3.5 m/s + release at peak vy (was releasing at the arc bottom → short), wall-run tangential speed only (was inflating to 16 m/s) + knee-height attach probe + kick 2.0, `groundBox` exposed.
+- Islands: Blender `flatten_top()` re-exports the kit platforms as `island_large/medium` with the rim pulled flat + a grass material; `PROPS` table (solid + visual bounds); solid decoration only on the outer 40 % with its *visual* edge outside a 1.8 m lane; per-biome prop sets; `force_opaque()` — **the whole Ruins kit had Alpha 0 (rendered black) since v2**.
+- Camera: `CollisionWorld.occluders` + `raycastCamera()`; island bodies and props ≥ 1.2 m register occluders; boom 5.2 m / pitch 14; player render hidden when boom < 1.3 m. Verified: tree in front → boom 0.52 + hidden; inside island body → 0.69.
+- Phase 4/5/6 slice: `crumble` (3 islands that give way 0.9 s after landing) and `drift` (island sliding ±2.5–4 m, player carried) templates; Island Fracture on 25 % of hop islands from stage 1; `Titan.ts` (storm-eye that hovers ahead from stage 3, telegraphs 1.4 s with a ring, then the island sinks slowly — colliders follow, rideable); biome ambient particles; `?seed=N` / `?daily`; `Platform.ts` CrazyGames SDK v3 wrapper (loading, gameplay start/stop, happytime on records / reaching the Titan, mid-game ad at every 3rd portal, SDK data storage merged into `Save`).
+- GitHub: gh active account `bhayanak`; both workflows green; Pages `built`; live site loads to the how-to card with the world generated, 60 fps, 0 console errors.
+
 ### 2026-10-18 (late) — v2.1: play-test fixes, then next-phase slice
 - Play-test feedback (20 min): walked through boulders/trees, player sometimes hidden, blue "coins", dash uncontrollable, no explanation of wall-run/grapple, "+8 % swift" meaningless.
 - Fixes: **props are solid** (`'prop'` colliders from `PROP_BOX` footprints, kept off the 1.6 m centre lane; camera boom collides with them); **vault only triggers on level geometry** — it was hopping onto any obstacle ≤ 1.35 m, which read as "passing through"; coins are gold (`coin.glb` + metallic material, magnet radius 1.8); dash 19 m/s × 0.26 s, keeps vertical velocity, steerable, +lift when falling; double jump default; wall-run snaps from 1.1 m and needs a sideways approach; **How-to card** on first run (H/Esc reopens; pauses), per-chunk hints on stages 0–1, grapple target ring glows gold + `E · GRAPPLE` prompt; upgrades rewritten with a "why" line (Swift removed); stage 0 teaches templates in a fixed order; gentler gaps; Rift starts 3 s after first input and ramps slower.
@@ -142,8 +153,8 @@ Rebuild: `/Applications/Blender.app/Contents/MacOS/Blender -b -P tools/build-pla
 ---
 
 ## Blockers / needs from you
-1. **Play v2.1** (`npm run dev` or the Pages URL once the deploy is green) and list what is still bad: collision, dash control, readability of wall-run/grapple, difficulty ramp, music. Everything tunable is in `TUNING` (movement), `CAM` (camera), `BIOMES` (look), chunk templates (`WorldGenerator.ts`), `Music.ts` (volume/tempo).
-2. GitHub Pages: the workflow now enables Pages itself. If `https://bhayanak.github.io/riftfall-skybreak/` still 404s after a green run, set Settings → Pages → Source = GitHub Actions once.
+1. **Play v2.3** (`npm run dev`, or https://bhayanak.github.io/riftfall-skybreak/ after the deploy). Try `?seed=123` to replay a route and `?daily` for the daily seed. Tell me which specific edge still feels wrong — the debug overlay (backquote) shows `seed` + `stage`, and `window.riftfall.gen.lastReport` lists every gap with the move it needs.
+2. Stage 3+ has the Rift Titan: say whether the slam cadence is fair.
 3. Music source (O2): keep procedural, or pick a composed track to layer in.
 
 ## Next up

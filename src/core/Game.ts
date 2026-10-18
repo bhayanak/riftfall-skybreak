@@ -5,6 +5,7 @@ import { Assets } from './Assets';
 import { CollisionWorld } from '../world/Colliders';
 import { WorldGenerator } from '../world/WorldGenerator';
 import { Rift } from '../world/Rift';
+import { Titan } from '../world/Titan';
 import { Rng } from '../world/Rng';
 import { Player } from '../player/Player';
 import { defaultStats } from '../player/Movement';
@@ -16,12 +17,30 @@ import { UpgradeDeck } from '../progression/Upgrade';
 import { Sfx } from '../audio/Sfx';
 import { Music } from '../audio/Music';
 import { Save } from '../progression/Save';
+import { Platform } from '../platform/Platform';
 import { Hud } from '../ui/Hud';
 import { TouchControls } from '../ui/TouchControls';
 import { Overlays } from '../ui/Overlays';
 
 type Phase = 'loading' | 'playing' | 'portal' | 'upgrade' | 'dead';
 const BIOME_ORDER: BiomeId[] = ['sky', 'fire', 'void'];
+/** Stage at which the Rift Titan starts stalking the route. */
+const TITAN_STAGE = 3;
+
+/** Seed from the URL (?seed=123 or ?daily), else random. */
+function pickSeed(): { seed: number; daily: boolean } {
+  const q = new URLSearchParams(location.search);
+  if (q.has('daily')) {
+    const d = new Date();
+    let h = d.getUTCFullYear() * 10000 + (d.getUTCMonth() + 1) * 100 + d.getUTCDate();
+    h = Math.imul(h ^ (h >>> 16), 2246822519) >>> 0;
+    h = Math.imul(h ^ (h >>> 13), 3266489917) >>> 0;
+    return { seed: ((h ^ (h >>> 16)) >>> 0) % 1000000 + 1, daily: true };
+  }
+  const s = Number(q.get('seed'));
+  if (Number.isFinite(s) && s > 0) return { seed: s | 0, daily: false };
+  return { seed: (Date.now() % 100000) | 0, daily: false };
+}
 
 export class Game {
   readonly app: pc.AppBase;
@@ -37,15 +56,18 @@ export class Game {
   readonly sfx: Sfx;
   readonly music = new Music();
   readonly save = new Save();
+  readonly platform = new Platform();
   player!: Player;
   camera!: CameraRig;
   env!: Environment;
   gen!: WorldGenerator;
   rift!: Rift;
+  titan!: Titan;
   vfx!: VFX;
 
   phase: Phase = 'loading';
-  seed = (Date.now() % 100000) | 0;
+  seed: number;
+  readonly daily: boolean;
   stage = 0;              // 0 sky, 1 fire, 2 void, 3 sky(harder)...
   energy = 0;
   distance = 0;           // total this run, across stages
@@ -63,6 +85,8 @@ export class Game {
   private constructor(app: pc.AppBase, canvas: HTMLCanvasElement, device: DeviceInfo) {
     this.app = app;
     this.device = device;
+    const s = pickSeed();
+    this.seed = s.seed; this.daily = s.daily;
     this.input = new Input(canvas);
     const base = `${import.meta.env.BASE_URL}assets/`;
     this.assets = new Assets(app, base);
@@ -103,11 +127,17 @@ export class Game {
 
   private async boot(): Promise<void> {
     this.overlays.loading(0);
-    await this.assets.loadAll((d, t) => this.overlays.loading((d / t) * 0.8));
+    this.platform.loadingStart();
+    await Promise.all([this.platform.init(), this.assets.loadAll((d, t) => this.overlays.loading((d / t) * 0.8))]);
+    this.save.attach(this.platform);
+    this.sfx.muted = this.music.muted = this.save.data.muted;
 
     this.env = new Environment(this.app, this.assets, this.device);
     this.gen = new WorldGenerator(this.app, this.assets, this.world);
     this.rift = new Rift(this.app);
+    this.titan = new Titan(this.app);
+    this.titan.onTelegraph = () => { this.hud.showHint('TITAN SLAM INCOMING — THE MARKED ISLAND WILL SINK', 2.5); this.sfx.play('land_hard', 0.5, 0.5); };
+    this.titan.onSlam = (isl) => { this.gen.builder.slam(isl); this.camera.kick(1.2); this.sfx.play('land_hard', 1, 0.6); this.vfx.emit(new pc.Vec3(isl.x, isl.top + 0.5, isl.z), 40, 9, 0.5, 1.2, 1.5, 4); };
     this.vfx = new VFX(this.app, this.device.profile === 'mobile-low' ? 60 : 160);
     this.player = new Player(this.app, this.assets, this.world);
     this.camera = new CameraRig(this.app, this.device.isMobile, this.world);
@@ -115,6 +145,7 @@ export class Game {
     if (this.device.isTouch) new TouchControls(this.input);
     this.player.movement.anchorProvider = (pos, fwd, range) => this.gen.findAnchor(pos, fwd, range)?.pos ?? null;
 
+    this.platform.loadingStop();
     await this.startRun(true);
   }
 
@@ -129,7 +160,7 @@ export class Game {
       this.player.movement.stats = defaultStats();
       this.deck.reset();
       this.flow.reset();
-      this.seed = (this.seed * 1103515245 + 12345) >>> 0;
+      if (!this.daily) this.seed = (this.seed * 1103515245 + 12345) >>> 0;
     }
     const b = this.biome();
     this.overlays.loading(0.9);
@@ -144,7 +175,9 @@ export class Game {
     this.player.movement.killY = this.gen.lowestTop() - 30;
     this.rift.setColor(b.rift);
     this.vfx.setColor(b.rift);
-    this.hud.setBiome(b.name);
+    this.titan.setColor(b.rift);
+    if (this.stage >= TITAN_STAGE) this.titan.start(this.gen.spawn); else this.titan.stop();
+    this.hud.setBiome(b.name + (this.daily ? ' · DAILY' : ''));
     this.flow.decayMult = this.player.movement.stats.flowDecayMult;
     this.checkpoint = 0;
     this.runTime = 0;
@@ -157,8 +190,9 @@ export class Game {
     this.hud.setPrompt(null);
     this.overlays.hide();
     this.phase = 'playing';
+    this.platform.gameplayStart();
     if (!this.seenHowTo) { this.seenHowTo = true; void this.showHelp(); }
-    else this.hud.showHint(`${b.name} · THE RIFT IS BEHIND YOU — RUN`, 4);
+    else this.hud.showHint(this.stage === TITAN_STAGE ? `${b.name} · THE RIFT TITAN HAS FOUND YOU` : `${b.name} · THE RIFT IS BEHIND YOU — RUN`, 4);
   }
 
   /** Pauses the run and shows the controls card until dismissed. */
@@ -191,6 +225,7 @@ export class Game {
   private async onPortal(): Promise<void> {
     this.phase = 'portal';
     const id = this.runId;
+    this.platform.gameplayStop();
     this.sfx.play('portal', 0.9);
     this.camera.pulse(18);
     this.energy += 100 * this.flow.multiplier;
@@ -206,6 +241,9 @@ export class Game {
     if (id !== this.runId) return;
     this.deck.take(options[i], this.player.movement.stats);
     this.sfx.play('ui_confirm', 0.8);
+    if (this.stage + 1 === TITAN_STAGE) this.platform.happytime();
+    await this.platform.portalBreak(() => { this.sfx.muted = this.music.muted = true; }, () => { this.sfx.muted = this.music.muted = this.save.data.muted; });
+    if (id !== this.runId) return;
     this.stage++;
     this.distanceBase = this.distance;
     await this.startRun(false);
@@ -214,14 +252,16 @@ export class Game {
   private async onDeath(reason: string): Promise<void> {
     this.phase = 'dead';
     const id = this.runId;
+    this.platform.gameplayStop();
     this.sfx.play('death', 1);
     this.camera.kick(1.5);
     this.vfx.emit(this.player.movement.position, 50, 10, 0.4, 1, 1, 2);
     await new Promise((r) => setTimeout(r, 900));
     if (id !== this.runId) return;
     const beat = this.save.recordRun(this.distance, this.energy, this.stage);
+    if (beat.distance || beat.stage) this.platform.happytime();
     const s = this.save.data;
-    const best = `BEST ${s.bestDistance} m · STAGE ${s.bestStage + 1} · ${s.runs} RUN${s.runs === 1 ? '' : 'S'}`;
+    const best = `BEST ${s.bestDistance} m · STAGE ${s.bestStage + 1} · ${s.runs} RUN${s.runs === 1 ? '' : 'S'} · SEED ${this.seed}${this.daily ? ' (DAILY)' : ''}`;
     const record = beat.distance ? 'NEW DISTANCE RECORD' : beat.stage ? 'NEW STAGE RECORD' : beat.energy ? 'NEW ENERGY RECORD' : '';
     await this.overlays.runOver(reason, this.energy, this.flow.best, this.distance, this.stage, best, record);
     if (id !== this.runId) return;
@@ -255,6 +295,7 @@ export class Game {
     }
     if (this.phase !== 'playing') {
       if (this.gen && this.player) this.gen.update(dt, this.player.movement.position);
+      this.titan?.update(dt, this.player?.movement.position ?? pc.Vec3.ZERO, this.gen, false);
       this.vfx?.update(dt);
       input.endFrame();
       return;
@@ -268,7 +309,15 @@ export class Game {
     if (!this.started && (Math.abs(input.move.x) + Math.abs(input.move.y) > 0.1 || input.wasPressed('jump'))) this.started = true;
     if (this.started) this.runTime += dt;
     this.riftGrace = Math.max(0, this.riftGrace - dt);
+    // ride drifting islands: the collider moved under us this frame, so move with it
+    m.position.x += this.gen.builder.carry(m.groundBox);
     this.player.update(dt, input, this.camera.yawRad);
+    // stepping onto a fractured island starts its clock
+    if (m.grounded) {
+      const isl = this.gen.islandOf(m.groundBox);
+      if (isl && this.gen.builder.stepOn(isl)) { this.sfx.play('land_hard', 0.6, 1.4); this.camera.kick(0.4); }
+    }
+    this.titan.update(dt, m.position, this.gen, true);
     this.camera.update(dt, input, m.position, m.speedXZ);
     this.camera.setFlow(this.flow.intensity01);
     // the camera got pushed into the player's back: hide the body instead of showing the inside of it
@@ -339,6 +388,7 @@ export class Game {
     this.flow.update(dt, m.speedXZ, m.grounded);
     this.env.setIntensity(this.flow.intensity01);
     this.vfx.trail(dt, m.position, (m.state === 'dash' ? 0.6 : 0) + this.flow.intensity01 * pc.math.clamp((m.speedXZ - 6) / 10, 0, 1));
+    this.vfx.ambient(dt, m.position, this.biome().id);
     this.vfx.update(dt);
 
     if (this.gen.atPortal(m.position)) { void this.onPortal(); input.endFrame(); return; }
