@@ -38,6 +38,14 @@ export class Player {
     app.root.addChild(this.entity);
   }
 
+  private visible = true;
+  /** Hide the body (camera too close) without stopping animation or movement. */
+  setVisible(v: boolean): void {
+    if (v === this.visible) return;
+    this.visible = v;
+    for (const r of this.model.findComponents('render') as pc.RenderComponent[]) r.enabled = v;
+  }
+
   update(dt: number, input: Input, camYaw: number): void {
     const m = this.movement;
     m.update(dt, input, camYaw);

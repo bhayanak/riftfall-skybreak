@@ -61,7 +61,36 @@ WORLD = {
     "world/ruin_torch.glb": f"{RUINS}/Torch.fbx",
     "world/ruin_flag.glb": f"{RUINS}/Flag_Wall.fbx",
     "world/ruin_bridge.glb": f"{RUINS}/BridgeSection.fbx",
+    # island bodies: kit platforms with the sloping rim pulled up flat so the whole footprint is walkable
+    "world/island_large.glb": f"{USN}/Nature/glTF/RockPlatforms_Large.gltf",
+    "world/island_medium.glb": f"{USN}/Nature/glTF/RockPlatforms_Medium.gltf",
 }
+
+# which outputs get a post-import fix-up
+FLAT_TOP = {"world/island_large.glb": 0.75, "world/island_medium.glb": 0.5}   # rim band depth (model units)
+
+def flatten_top(band):
+    """Pull every vertex within `band` of the top plane up to the top (Blender is Z-up after import), then give
+    the whole top a grass material so the walkable surface reads as meadow, not sand."""
+    for o in bpy.data.objects:
+        if o.type != "MESH": continue
+        me = o.data
+        top = max(v.co.z for v in me.vertices)
+        n = 0
+        for v in me.vertices:
+            if top - v.co.z < band: v.co.z = top; n += 1
+        grass = bpy.data.materials.new("IslandGrass")
+        grass.use_nodes = True
+        bsdf = next(nd for nd in grass.node_tree.nodes if nd.type == "BSDF_PRINCIPLED")
+        bsdf.inputs["Base Color"].default_value = (0.36, 0.60, 0.24, 1.0)
+        bsdf.inputs["Roughness"].default_value = 0.9
+        me.materials.append(grass)
+        slot = len(me.materials) - 1
+        tops = 0
+        for p in me.polygons:
+            if all(top - me.vertices[i].co.z < 1e-4 for i in p.vertices): p.material_index = slot; tops += 1
+        me.update()
+        log(f"  flattened {n}/{len(me.vertices)} verts to top {top:.2f}; {tops} top faces -> grass")
 
 def log(*a): print("[kit]", *a)
 def reset(): bpy.ops.wm.read_factory_settings(use_empty=True)
@@ -196,6 +225,7 @@ if WHAT & {"world", "all"}:
             import_any(src)
             fix_images(os.path.dirname(os.path.dirname(src)))
             apply_scale_all()
+            if rel in FLAT_TOP: flatten_top(FLAT_TOP[rel])
             resize_images(512)
             export_glb(dst, export_animations=False, export_skins=False, export_materials="EXPORT",
                        export_texcoords=True, export_normals=True, export_image_format="JPEG", export_jpeg_quality=80)

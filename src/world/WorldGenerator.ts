@@ -3,6 +3,7 @@ import type { Assets } from '../core/Assets';
 import { BoxCollider, CollisionWorld } from './Colliders';
 import { IslandBuilder, emissive, type Island } from './Island';
 import { Rng } from './Rng';
+import { maxGap, neededMove, type Move } from './Envelope';
 import type { Biome } from '../graphics/Environment';
 
 function coinMaterial(): pc.StandardMaterial {
@@ -26,13 +27,25 @@ export interface HintMarker { z: number; text: string; touch: string; shown: boo
 type ChunkName = 'hop' | 'stairs' | 'zigzag' | 'dashgap' | 'pillars' | 'descend' | 'bridge' | 'canyon' | 'canyonGap' | 'wallrun' | 'grapple';
 
 const CHUNK_HINTS: Partial<Record<ChunkName, [string, string]>> = {
+  hop: ['HOLD SPACE FOR A FULL JUMP. LANDED SHORT? YOU GRAB THE LEDGE AND PULL UP', 'HOLD JUMP FOR A FULL JUMP. SHORT? YOU GRAB THE LEDGE'],
+  zigzag: ['SIDE ISLANDS — JUMP, THEN SPACE AGAIN IN THE AIR IF YOU NEED MORE', 'SIDE ISLANDS — JUMP, THEN JUMP AGAIN IN THE AIR'],
+  stairs: ['STEP UP — JUMP AT THE LEDGE, YOU WILL PULL YOURSELF UP', 'STEP UP — JUMP AT THE LEDGE, YOU WILL PULL UP'],
   dashgap: ['BIG GAP AHEAD — JUMP, THEN SHIFT IN THE AIR TO DASH', 'BIG GAP — JUMP, THEN TAP DASH IN THE AIR'],
   canyon: ['WALL-RUN: JUMP TOWARDS A WALL WHILE RUNNING. SPACE AGAIN TO LEAP OFF', 'WALL-RUN: JUMP INTO A WALL WHILE MOVING. JUMP AGAIN TO LEAP OFF'],
   canyonGap: ['NO FLOOR — WALL-RUN ALONG THE SIDE, THEN LEAP TO THE OTHER WALL', 'NO FLOOR — WALL-RUN THE SIDE, JUMP ACROSS'],
   wallrun: ['CHAIN THE WALLS: RUN ONE, LEAP TO THE NEXT', 'CHAIN THE WALLS: RUN ONE, LEAP TO THE NEXT'],
   grapple: ['GRAPPLE: WHEN THE RING GLOWS, PRESS E TO SWING. E AGAIN TO LET GO', 'GRAPPLE: WHEN THE RING GLOWS, TAP GRAPPLE TO SWING'],
   pillars: ['SHORT HOPS — KEEP YOUR SPEED', 'SHORT HOPS — KEEP YOUR SPEED'],
-  descend: ['DROP DOWN — SPACE MID-AIR FOR A SECOND JUMP', 'DROP DOWN — JUMP MID-AIR FOR A SECOND JUMP'],
+  descend: ['DROP DOWN — JUMP OFF THE EDGE, SPACE AGAIN MID-AIR IF SHORT', 'DROP DOWN — JUMP OFF THE EDGE, JUMP AGAIN IF SHORT'],
+};
+
+/** One hop of the route as seen by the validator. */
+export interface RouteEdge { from: number; to: number; d: number; h: number; move: Move | 'wall' | 'grapple' | null; }
+
+/** Intended way across for each template, used by the validator as the ceiling a gap may demand. */
+const INTENDED: Record<ChunkName, Move | 'wall' | 'grapple'> = {
+  hop: 'jump', stairs: 'jump', zigzag: 'jump', dashgap: 'dash', pillars: 'jump', descend: 'jump', bridge: 'run',
+  canyon: 'jump', canyonGap: 'wall', wallrun: 'wall', grapple: 'grapple',
 };
 
 interface Cursor { x: number; y: number; z: number; }
@@ -58,6 +71,11 @@ export class WorldGenerator {
   private anchorMat!: pc.StandardMaterial;
   private anchorHotMat!: pc.StandardMaterial;
   private t = 0;
+  /** Which aid the island at builder.islands[i] is reached by, when it is not a plain jump. */
+  private via = new Map<Island, 'wall' | 'grapple'>();
+  /** Chunk each island belongs to (for the validator's intended-move ceiling). */
+  private chunkOf = new Map<Island, ChunkName>();
+  lastReport: RouteEdge[] = [];
 
   constructor(app: pc.AppBase, private assets: Assets, world: CollisionWorld) {
     this.builder = new IslandBuilder(app, assets, world, this.rng);
@@ -71,6 +89,8 @@ export class WorldGenerator {
     this.gems.length = 0;
     this.checkpoints.length = 0;
     this.hints.length = 0;
+    this.via.clear();
+    this.chunkOf.clear();
     this.builder.setBiome(biome);
     this.coinMat = coinMaterial();
     this.anchorMat = emissive(biome.rift, 1.2);
@@ -89,7 +109,9 @@ export class WorldGenerator {
       const d = difficulty + i / chunkCount;
       const h = CHUNK_HINTS[name];
       if (h) this.hints.push({ z: cur.z + 4, text: h[0], touch: h[1], shown: false });
+      const before = this.builder.islands.length;
       this.chunk(name, cur, d);
+      for (let k = before; k < this.builder.islands.length; k++) this.chunkOf.set(this.builder.islands[k], name);
     });
 
     // portal island
@@ -101,7 +123,40 @@ export class WorldGenerator {
     cur.z -= pw;
 
     // distant scenery islands for parallax (no colliders)
-    this.scenery(cur.z);
+    this.scenery(cur.z, this.lowestTop());
+    this.lastReport = this.validate();
+  }
+
+  /**
+   * Walk consecutive landing surfaces and ask the movement envelope what each gap demands. Anything that needs
+   * more than its template intends (or nothing at all) is a generator bug worth logging. Returns every edge.
+   */
+  validate(): RouteEdge[] {
+    const isl = this.builder.islands;
+    const out: RouteEdge[] = [];
+    for (let i = 0; i + 1 < isl.length; i++) {
+      const a = isl[i], b = isl[i + 1];
+      const tx = pc.math.clamp(b.x, a.x - a.w / 2, a.x + a.w / 2);
+      const lx = pc.math.clamp(tx, b.x - b.w / 2, b.x + b.w / 2);
+      const dz = Math.max(0, (a.z - a.d / 2) - (b.z + b.d / 2));
+      const d = Math.hypot(lx - tx, dz);
+      const h = b.top - a.top;
+      const aid = this.via.get(b);
+      const move = aid ?? neededMove(d, h);
+      out.push({ from: i, to: i + 1, d: +d.toFixed(1), h: +h.toFixed(1), move });
+    }
+    return out;
+  }
+
+  /** Edges that demand more than their chunk intends. Empty means the route is honest. */
+  violations(): RouteEdge[] {
+    const rank: Record<string, number> = { run: 0, jump: 1, djump: 2, dash: 3, ddash: 4, wall: 5, grapple: 5 };
+    const isl = this.builder.islands;
+    return this.lastReport.filter((e) => {
+      const chunk = this.chunkOf.get(isl[e.to]);
+      const ceiling = chunk ? INTENDED[chunk] : 'jump';
+      return e.move === null || rank[e.move] > rank[ceiling];
+    });
   }
 
   update(dt: number, playerPos: pc.Vec3, targetAnchor: Anchor | null = null): void {
@@ -274,15 +329,22 @@ export class WorldGenerator {
   }
 
   /** island helper: centre at cursor, advance cursor past it, drop a checkpoint on it */
-  private isl(cur: Cursor, w: number, d: number, opts: Partial<Parameters<IslandBuilder['island']>[0]> = {}): void {
+  private isl(cur: Cursor, w: number, d: number, opts: Partial<Parameters<IslandBuilder['island']>[0]> = {}): Island {
     const z = cur.z - d / 2;
-    this.builder.island({ x: cur.x, top: cur.y, z, w, d, decor: 0.45, ...opts });
+    const isl = this.builder.island({ x: cur.x, top: cur.y, z, w, d, decor: 0.45, ...opts });
     this.addCheckpoint(cur.x, cur.y, z);
     cur.z -= d;
+    return isl;
+  }
+
+  /** gap that stays inside what `move` can cross for this rise/drop (with a lateral component already decided) */
+  private fit(move: Move, want: number, h: number, lateral = 0): number {
+    const cap = Math.sqrt(Math.max(1, maxGap(move, h) ** 2 - lateral * lateral));
+    return Math.max(1.5, Math.min(want, cap));
   }
 
   protected hop(cur: Cursor, d: number): void {
-    const g = 3.5 + Math.min(2.5, d * 1.0);
+    const g = this.fit('jump', 3.5 + Math.min(2.5, d * 1.0), 0);
     this.gemsLine(cur.x, cur.y, cur.z, cur.x, cur.y, cur.z - g, 3, 1.2);
     this.gap(cur, g);
     this.isl(cur, 8 + this.rng.int(3), 8, { ruins: this.rng.chance(0.4) });
@@ -290,19 +352,21 @@ export class WorldGenerator {
 
   protected stairs(cur: Cursor, d: number): void {
     const steps = 2 + this.rng.int(2);
+    const rise = 1.3;
     for (let i = 0; i < steps; i++) {
-      const dx = (this.rng.chance(0.5) ? -1 : 1) * (2 + this.rng.float() * 1.2);
-      const g = 3 + Math.min(1.5, d);
-      this.gemsLine(cur.x, cur.y, cur.z, cur.x + dx, cur.y + 1.4, cur.z - g, 2, 0.8);
-      cur.x += dx; cur.y += 1.4; this.gap(cur, g);
+      const dx = (this.rng.chance(0.5) ? -1 : 1) * (1.0 + this.rng.float() * 1.0);
+      const g = this.fit('jump', 3 + Math.min(1.5, d), rise, dx);
+      this.gemsLine(cur.x, cur.y, cur.z, cur.x + dx, cur.y + rise, cur.z - g, 2, 0.8);
+      cur.x += dx; cur.y += rise; this.gap(cur, g);
       this.isl(cur, 7, 6, { decor: 0.35 });
     }
   }
 
   protected zigzag(cur: Cursor, d: number): void {
-    const g = 3.5 + Math.min(2, d);
+    const dxAbs = 3;
     for (let i = 0; i < 3; i++) {
-      const dx = (i % 2 === 0 ? -1 : 1) * 4;
+      const dx = (i % 2 === 0 ? -1 : 1) * dxAbs;
+      const g = this.fit('jump', 3.5 + Math.min(2, d), 0, dxAbs);
       this.gemsLine(cur.x, cur.y, cur.z, cur.x + dx, cur.y, cur.z - g, 2, 1);
       cur.x += dx; this.gap(cur, g);
       this.isl(cur, 6, 6, { decor: 0.3 });
@@ -311,35 +375,37 @@ export class WorldGenerator {
   }
 
   protected dashgap(cur: Cursor, d: number): void {
-    const g = 6.5 + Math.min(3, d * 1.5);
+    const g = this.fit('dash', 6.5 + Math.min(3, d * 1.5), 0);
     this.gemsLine(cur.x, cur.y, cur.z, cur.x, cur.y, cur.z - g, 4, 1.5);
     this.gap(cur, g);
     this.isl(cur, 9, 8, { ruins: true });
   }
 
   protected pillars(cur: Cursor, d: number): void {
-    const n = 4;
-    const g = 2.8 + Math.min(1.5, d);
+    const n = 4, pw = 3.4;
     for (let i = 0; i < n; i++) {
+      const dx = (this.rng.float() - 0.5) * 2.0;
+      const g = this.fit('jump', 2.8 + Math.min(1.5, d), 0, dx);
       this.gap(cur, g);
-      const dx = (this.rng.float() - 0.5) * 2.5;
       cur.x += dx;
-      const z = cur.z - 1.4;
-      this.builder.island({ x: cur.x, top: cur.y, z, w: 2.8, d: 2.8, decor: 0 });
+      const z = cur.z - pw / 2;
+      this.builder.island({ x: cur.x, top: cur.y, z, w: pw, d: pw, decor: 0 });
       if (i % 2 === 1) this.gem(cur.x, cur.y + 1.1, z);
-      cur.z -= 2.8;
+      cur.z -= pw;
     }
-    this.addCheckpoint(cur.x, cur.y, cur.z + 1.4);
+    this.addCheckpoint(cur.x, cur.y, cur.z + pw / 2);
+    const back = Math.abs(cur.x);
     cur.x = 0;
-    this.gap(cur, 3.2);
+    this.gap(cur, this.fit('jump', 3.2, 0, back));
     this.isl(cur, 8, 6);
   }
 
   protected descend(cur: Cursor, _d: number): void {
+    const drop = 2.2;
     for (let i = 0; i < 3; i++) {
-      const g = 5.5;
-      cur.y -= 2.2;
-      this.gemsLine(cur.x, cur.y + 2.2, cur.z, cur.x, cur.y, cur.z - g, 2, 0.5);
+      const g = this.fit('jump', 5.5, -drop);
+      cur.y -= drop;
+      this.gemsLine(cur.x, cur.y + drop, cur.z, cur.x, cur.y, cur.z - g, 2, 0.5);
       this.gap(cur, g);
       this.isl(cur, 6, 6, { decor: 0.3 });
     }
@@ -347,48 +413,48 @@ export class WorldGenerator {
 
   protected bridge(cur: Cursor, _d: number): void {
     const len = 12;
-    this.gap(cur, 2.5);
+    this.gap(cur, this.fit('run', 2.5, 0));
     this.builder.beam(cur.x, cur.y, cur.z - len / 2, len, 2.2);
     this.gemsLine(cur.x, cur.y, cur.z - 2, cur.x, cur.y, cur.z - len + 2, 4);
     this.addCheckpoint(cur.x, cur.y, cur.z - len / 2);
     cur.z -= len;
-    this.gap(cur, 2.5);
+    this.gap(cur, this.fit('run', 2.5, 0));
     this.isl(cur, 7, 6, { ruins: true });
   }
 
   /** narrow beam between two wall-run walls; the beam has a gap you can wall-run across */
   protected canyon(cur: Cursor, d: number): void {
     const len = 16;
-    this.gap(cur, 3);
+    this.gap(cur, this.fit('jump', 3, 0));
     const z0 = cur.z;
-    const beamGap = d > 0.8 ? 5 : 0;
+    const beamGap = d > 0.8 ? this.fit('jump', 5, 0) : 0;
     if (beamGap > 0) {
       const seg = (len - beamGap) / 2;
-      this.builder.beam(cur.x, cur.y, z0 - seg / 2, seg, 1.6);
-      this.builder.beam(cur.x, cur.y, z0 - len + seg / 2, seg, 1.6);
+      this.builder.beam(cur.x, cur.y, z0 - seg / 2, seg, 1.8);
+      this.builder.beam(cur.x, cur.y, z0 - len + seg / 2, seg, 1.8);
     } else {
-      this.builder.beam(cur.x, cur.y, z0 - len / 2, len, 1.6);
+      this.builder.beam(cur.x, cur.y, z0 - len / 2, len, 1.8);
     }
-    this.builder.wall(cur.x - 3, cur.y - 1, z0 - len / 2, 6, len, 'l');
-    this.builder.wall(cur.x + 3, cur.y - 1, z0 - len / 2, 6, len, 'r');
-    this.gemsLine(cur.x - 2.3, cur.y + 1.5, z0 - 3, cur.x - 2.3, cur.y + 1.5, z0 - len + 3, 4);
+    this.builder.wall(cur.x - 2.6, cur.y - 1, z0 - len / 2, 6, len, 'l');
+    this.builder.wall(cur.x + 2.6, cur.y - 1, z0 - len / 2, 6, len, 'r');
+    this.gemsLine(cur.x - 1.9, cur.y + 1.5, z0 - 3, cur.x - 1.9, cur.y + 1.5, z0 - len + 3, 4);
     this.addCheckpoint(cur.x, cur.y, z0 - 2);
     cur.z -= len;
-    this.gap(cur, 3);
+    this.gap(cur, this.fit('jump', 3, 0));
     this.isl(cur, 8, 7, { ruins: true });
   }
 
-  /** canyon with no floor: must wall-run */
+  /** canyon with no floor: must wall-run (walls close enough to catch you from the centre line) */
   protected canyonGap(cur: Cursor, _d: number): void {
     const len = 12;
     this.gap(cur, 2);
     const z0 = cur.z;
-    this.builder.wall(cur.x - 2.6, cur.y - 2, z0 - len / 2, 7, len, 'l');
-    this.builder.wall(cur.x + 2.6, cur.y - 2, z0 - len / 2 + 1, 7, len, 'r');
-    this.gemsLine(cur.x - 1.8, cur.y + 1.5, z0 - 2, cur.x - 1.8, cur.y + 1.5, z0 - len + 2, 4);
+    this.builder.wall(cur.x - 1.9, cur.y - 2, z0 - len / 2, 7, len, 'l');
+    this.builder.wall(cur.x + 1.9, cur.y - 2, z0 - len / 2 + 1, 7, len, 'r');
+    this.gemsLine(cur.x - 1.1, cur.y + 1.5, z0 - 2, cur.x - 1.1, cur.y + 1.5, z0 - len + 2, 4);
     cur.z -= len;
     this.gap(cur, 1.5);
-    this.isl(cur, 8, 7);
+    this.via.set(this.isl(cur, 8, 7), 'wall');
   }
 
   /** two offset walls, no floor between */
@@ -396,14 +462,14 @@ export class WorldGenerator {
     const len = 9;
     this.gap(cur, 2);
     const z0 = cur.z;
-    this.builder.wall(cur.x - 2.2, cur.y - 2, z0 - len / 2, 6, len, 'l');
-    this.gemsLine(cur.x - 1.4, cur.y + 1.2, z0 - 1, cur.x - 1.4, cur.y + 1.2, z0 - len + 1, 3);
+    this.builder.wall(cur.x - 1.9, cur.y - 2, z0 - len / 2, 6, len, 'l');
+    this.gemsLine(cur.x - 1.1, cur.y + 1.2, z0 - 1, cur.x - 1.1, cur.y + 1.2, z0 - len + 1, 3);
     cur.z -= len + 2;
-    this.builder.wall(cur.x + 2.2, cur.y - 2, cur.z - len / 2, 6, len, 'r');
-    this.gemsLine(cur.x + 1.4, cur.y + 1.2, cur.z - 1, cur.x + 1.4, cur.y + 1.2, cur.z - len + 1, 3);
+    this.builder.wall(cur.x + 1.9, cur.y - 2, cur.z - len / 2, 6, len, 'r');
+    this.gemsLine(cur.x + 1.1, cur.y + 1.2, cur.z - 1, cur.x + 1.1, cur.y + 1.2, cur.z - len + 1, 3);
     cur.z -= len;
     this.gap(cur, 1.5);
-    this.isl(cur, 8, 7, { ruins: true });
+    this.via.set(this.isl(cur, 8, 7, { ruins: true }), 'wall');
   }
 
   protected grapple(cur: Cursor, d: number): void {
@@ -412,7 +478,7 @@ export class WorldGenerator {
     this.anchor(cur.x, cur.y + 7, z0 - g * 0.5);
     this.gemsLine(cur.x, cur.y, z0, cur.x, cur.y, z0 - g, 5, 3.5);
     this.gap(cur, g);
-    this.isl(cur, 9, 8, { ruins: true });
+    this.via.set(this.isl(cur, 9, 8, { ruins: true }), 'grapple');
   }
 
   // ------------------------------------------------------------------------------------ portal
@@ -453,13 +519,14 @@ export class WorldGenerator {
     this.portalCollider = new BoxCollider(new pc.Vec3(x, y + 2.4, z), new pc.Vec3(4.5, 5, 1.6), undefined, 'checkpoint');
   }
 
-  private scenery(endZ: number): void {
+  private scenery(endZ: number, routeLow: number): void {
     const n = 26;
     for (let i = 0; i < n; i++) {
       const side = this.rng.chance(0.5) ? -1 : 1;
-      const x = side * this.rng.range(28, 90);
+      const x = side * this.rng.range(34, 90);
       const z = this.rng.range(endZ - 60, 30);
-      const y = this.rng.range(-35, 14);
+      // nearby scenery sits well below the route so it never reads as a reachable platform
+      const y = Math.abs(x) < 55 ? this.rng.range(routeLow - 35, routeLow - 9) : this.rng.range(routeLow - 35, 14);
       const s = this.rng.range(1.5, 4.5);
       const e = this.assets.spawn(this.rng.pick(['rock_platform_large', 'rock_platform_medium', 'rock_platforms_1', 'rock_platform_tall'] as const));
       e.setPosition(x, y, z);
@@ -473,10 +540,14 @@ export class WorldGenerator {
         this.builder.root.addChild(t);
       }
     }
+    // clouds stay out of the route corridor: either far to the side, or well below the lowest surface
     for (let i = 0; i < 18; i++) {
       const c = this.assets.spawn(this.rng.pick(['cloud_1', 'cloud_2', 'cloud_3'] as const));
       const s = this.rng.range(6, 14);
-      c.setPosition(this.rng.range(-140, 140), this.rng.range(-50, -10) + (this.rng.chance(0.3) ? 60 : 0), this.rng.range(endZ - 80, 40));
+      const aside = this.rng.chance(0.6);
+      const x = aside ? (this.rng.chance(0.5) ? -1 : 1) * this.rng.range(40, 140) : this.rng.range(-30, 30);
+      const y = aside ? this.rng.range(routeLow - 30, 40) : routeLow - this.rng.range(22, 50);
+      c.setPosition(x, y, this.rng.range(endZ - 80, 40));
       c.setLocalScale(s, s * 0.7, s);
       c.setEulerAngles(0, this.rng.float() * 360, 0);
       this.builder.root.addChild(c);

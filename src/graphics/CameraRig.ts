@@ -3,11 +3,11 @@ import type { Input } from '../core/Input';
 import type { CollisionWorld } from '../world/Colliders';
 
 const CAM = {
-  distance: 6.0,
+  distance: 5.2,
   height: 1.6,
   pitchMin: -40,
   pitchMax: 65,
-  defaultPitch: 12,
+  defaultPitch: 14,
   mouseSens: 0.12,
   followLag: 18,
   baseFov: 70,
@@ -24,6 +24,8 @@ export class CameraRig {
   readonly entity: pc.Entity;
   yaw = 0;
   pitch = CAM.defaultPitch;
+  /** Current boom length after collision; the game fades the player out when this gets very short. */
+  boomDist = CAM.distance;
   private target = new pc.Vec3();
   private smoothTarget = new pc.Vec3();
   private fovPulse = 0;
@@ -77,11 +79,12 @@ export class CameraRig {
     // camera sits behind the player along +Z in yaw space (player faces -Z at yaw 0)
     this.tmp.set(Math.sin(yawR) * cp, Math.sin(pitchR), Math.cos(yawR) * cp);
 
-    // shorten the boom if geometry sits between the focus point and the camera
+    // shorten the boom if geometry (or a visual occluder: island body, tree canopy) sits between focus and camera
     let dist = CAM.distance;
-    const hit = this.world.raycast(this.smoothTarget, this.tmp, CAM.distance + 0.3);
-    if (hit) dist = Math.max(0.6, hit.dist - 0.3);
-    const pos = this.tmp.mulScalar(dist).add(this.smoothTarget);
+    const hit = this.world.raycastCamera(this.smoothTarget, this.tmp, CAM.distance + 0.3);
+    if (hit) dist = Math.max(0.5, hit.dist - 0.3);
+    this.boomDist += (dist - this.boomDist) * (dist < this.boomDist ? 1 : 1 - Math.exp(-dt * 6));
+    const pos = this.tmp.mulScalar(this.boomDist).add(this.smoothTarget);
 
     // keep camera above ground a little when looking up from below a platform
     pos.y = Math.max(pos.y, focus.y + 0.4);

@@ -26,6 +26,7 @@ const BIOME_ORDER: BiomeId[] = ['sky', 'fire', 'void'];
 export class Game {
   readonly app: pc.AppBase;
   readonly device: DeviceInfo;
+  readonly biomes = BIOMES;
   readonly input: Input;
   readonly assets: Assets;
   readonly world = new CollisionWorld();
@@ -136,6 +137,10 @@ export class Game {
     if (id !== this.runId) return;
     const difficulty = 0.6 + this.stage * 0.5;
     this.gen.generate(this.seed + this.stage * 7919, b, difficulty, 10 + Math.min(4, this.stage), this.stage);
+    if (import.meta.env.DEV) {
+      const bad = this.gen.violations();
+      if (bad.length) console.warn('[route] edges harder than intended:', bad);
+    }
     this.player.movement.killY = this.gen.lowestTop() - 30;
     this.rift.setColor(b.rift);
     this.vfx.setColor(b.rift);
@@ -266,6 +271,8 @@ export class Game {
     this.player.update(dt, input, this.camera.yawRad);
     this.camera.update(dt, input, m.position, m.speedXZ);
     this.camera.setFlow(this.flow.intensity01);
+    // the camera got pushed into the player's back: hide the body instead of showing the inside of it
+    this.player.setVisible(this.camera.boomDist > 1.3);
     // grapple targeting feedback: highlight the ring you'd grab and show the key
     const fwd = Math.abs(input.move.x) + Math.abs(input.move.y) > 0.1 ? this.camera.forwardXZ() : m.facing;
     const target = m.state === 'grapple' ? null : this.gen.findAnchor(m.position, fwd, m.stats.grappleRange);

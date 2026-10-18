@@ -69,9 +69,12 @@ export function sphereVsBox(p: pc.Vec3, r: number, box: BoxCollider, outNormal: 
 
 export class CollisionWorld {
   readonly boxes: BoxCollider[] = [];
+  /** Visual-only volumes (island bodies, tree canopies) the camera boom must not enter. Never block the player. */
+  readonly occluders: BoxCollider[] = [];
 
   add(box: BoxCollider): BoxCollider { this.boxes.push(box); return box; }
-  clear(): void { this.boxes.length = 0; }
+  addOccluder(box: BoxCollider): BoxCollider { this.occluders.push(box); return box; }
+  clear(): void { this.boxes.length = 0; this.occluders.length = 0; }
 
   /**
    * Resolve a vertical capsule (feet at `pos`, radius r, height h) against all boxes.
@@ -126,10 +129,20 @@ export class CollisionWorld {
 
   /** Ray vs all boxes (dir must be unit length). Returns nearest hit within maxDist. */
   raycast(from: pc.Vec3, dirWorld: pc.Vec3, maxDist: number): { dist: number; box: BoxCollider } | null {
-    let best: { dist: number; box: BoxCollider } | null = null;
+    return this.raycastList(this.boxes, from, dirWorld, maxDist, null);
+  }
+
+  /** Camera boom ray: colliders plus visual occluders. */
+  raycastCamera(from: pc.Vec3, dirWorld: pc.Vec3, maxDist: number): { dist: number; box: BoxCollider } | null {
+    const a = this.raycastList(this.boxes, from, dirWorld, maxDist, null);
+    const b = this.raycastList(this.occluders, from, dirWorld, a ? a.dist : maxDist, a);
+    return b ?? a;
+  }
+
+  private raycastList(list: BoxCollider[], from: pc.Vec3, dirWorld: pc.Vec3, maxDist: number, best: { dist: number; box: BoxCollider } | null): { dist: number; box: BoxCollider } | null {
     const local = new pc.Vec3();
     const dir = new pc.Vec3();
-    for (const box of this.boxes) {
+    for (const box of list) {
       if (box.tag === 'checkpoint') continue;
       local.sub2(from, box.center);
       box.invRot.transformVector(local, local);

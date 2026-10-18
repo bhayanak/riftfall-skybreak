@@ -3,6 +3,7 @@ import * as pc from 'playcanvas';
 /** Everything in public/assets we load up-front. Keys are the file stem under assets/world or assets/player. */
 export const WORLD_MODELS = [
   'rock_platform_large', 'rock_platform_medium', 'rock_platform_tall', 'rock_platforms_1', 'rock_1', 'rock_2',
+  'island_large', 'island_medium',
   'rock_medium_1', 'rock_medium_2', 'rock_medium_3',
   'tree', 'tree_fruit', 'bush', 'grass_1', 'grass_2', 'pine_1', 'pine_3', 'common_tree_2', 'twisted_tree_1', 'dead_tree_2',
   'cloud_1', 'cloud_2', 'cloud_3',

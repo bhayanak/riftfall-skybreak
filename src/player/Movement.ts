@@ -17,7 +17,7 @@ export const TUNING = {
   gravity: 28,
   maxFall: 45,
   jumpVelocity: 11.2,
-  jumpCutMultiplier: 0.5,
+  jumpCutMultiplier: 0.62,
   coyoteTime: 0.15,
   jumpBuffer: 0.16,
   dashSpeed: 19,
@@ -29,7 +29,7 @@ export const TUNING = {
   wallRunMinSpeed: 4,
   wallRunTime: 1.6,
   wallRunGravity: 0.18,
-  wallRunKick: 2.5,
+  wallRunKick: 2.0,
   wallJumpOut: 7.5,
   wallJumpUp: 10,
   wallSnapDist: 1.1,      // how far a wall can be and still catch you
@@ -37,12 +37,14 @@ export const TUNING = {
   slideTime: 0.75,
   slideBoost: 1.25,
   slideMinSpeed: 6,
-  // vault
+  // vault / mantle
   vaultMaxHeight: 1.35,
+  mantleHeight: 1.5,       // airborne: how far below a ledge top your feet can be and still pull up
   // grapple
   grappleRange: 22,
   grappleSwingTime: 1.6,
   grapplePull: 14,
+  grappleReel: 3.5,        // m/s the rope shortens during a swing
   grappleReleaseBoost: 1.12,
   killY: -32,
 };
@@ -111,6 +113,7 @@ export class Movement {
   private vaultTimer = 0;
   private grappleTimer = 0;
   private grappleLen = 0;
+  private prevSwingVy = 0;
   private contacts: Contact[] = [];
   private jumpHeld = false;
   private airTime = 0;
@@ -207,6 +210,8 @@ export class Movement {
       case 'grapple': {
         this.grappleTimer += dt;
         const a = this.grappleAnchor!;
+        // reel in while swinging: shorter rope = higher, faster arc, so even a weak start throws far enough
+        this.grappleLen = Math.max(3.5, this.grappleLen - T.grappleReel * dt);
         _tmp.sub2(this.position, a);
         const dist = _tmp.length();
         this.velocity.y -= T.gravity * dt;
@@ -219,15 +224,22 @@ export class Movement {
           if (vr > 0) { this.velocity.x -= _tmp.x * vr; this.velocity.y -= _tmp.y * vr; this.velocity.z -= _tmp.z * vr; }
           this.position.copy(a).add(_tmp.mulScalar(this.grappleLen));
         }
-        const past = (this.position.z - a.z) * this.facing.z > 0 && this.velocity.y > 1;
-        if (past || this.grappleTimer > T.grappleSwingTime) this.releaseGrapple();
+        // let go past the anchor once upward speed stops growing (≈ the longest throw), or on the timer
+        const past = (this.position.z - a.z) * this.facing.z > 0;
+        const vy = this.velocity.y;
+        const peaked = vy > 0.5 && vy < this.prevSwingVy;
+        const steep = this.velocity.length() > 1 && vy / this.velocity.length() > 0.6;
+        this.prevSwingVy = vy;
+        if ((past && (peaked || steep)) || this.grappleTimer > T.grappleSwingTime) this.releaseGrapple();
         break;
       }
       case 'wallrun': {
         this.wallTimer -= dt;
         const n = this.wallNormal;
         const tx = -n.z * this.wallSide, tz = n.x * this.wallSide;
-        const sp = Math.max(runSpeed, this.speedXZ);
+        // tangential speed only (the into-wall hold must not feed back into speed), capped so exits stay landable
+        const along = this.velocity.x * tx + this.velocity.z * tz;
+        const sp = pc.math.clamp(Math.max(runSpeed, along), runSpeed, runSpeed * 1.3);
         this.velocity.x = tx * sp - n.x * 2.5;
         this.velocity.z = tz * sp - n.z * 2.5;
         this.velocity.y -= T.gravity * T.wallRunGravity * dt;
@@ -241,7 +253,8 @@ export class Movement {
           if (S.dashResetOnTrick) this.dashChargesLeft = S.dashCharges;
           break;
         }
-        _tmp.set(this.position.x, this.position.y + 1, this.position.z);
+        // stay attached while any part of the body is beside the wall (probe at knee height, not head height)
+        _tmp.set(this.position.x, this.position.y + 0.5, this.position.z);
         _tmp2.copy(n).mulScalar(-1);
         const hit = this.world.raycast(_tmp, _tmp2, T.wallSnapDist + 0.4);
         if (!hit || hit.box.tag !== 'wall' || this.wallTimer <= 0) this.endWallRun(false);
@@ -314,6 +327,9 @@ export class Movement {
     const wasGrounded = this.grounded;
     let groundedNow = false;
     this.wallContact = null;
+    // direction of travel before collision response strips the into-wall component (vault/mantle need it)
+    const preVx = this.velocity.x, preVz = this.velocity.z;
+    let ledge: Contact | null = null;   // side or corner of level geometry we bumped while airborne
     for (let i = 0; i < steps; i++) {
       this.position.x += this.velocity.x * sdt;
       this.position.y += this.velocity.y * sdt;
@@ -325,6 +341,7 @@ export class Movement {
         if (vn < 0 && this.state !== 'wallrun') { this.velocity.x -= n.x * vn; this.velocity.y -= n.y * vn; this.velocity.z -= n.z * vn; }
         if (n.y > 0.65) { groundedNow = true; this.groundNormal.copy(n); }
         else if (Math.abs(n.y) < 0.35) this.wallContact = ct;
+        if (n.y < 0.65 && n.y > -0.2 && ct.collider.tag === 'ground' && !wasGrounded) ledge = ct;
       }
     }
 
@@ -337,7 +354,7 @@ export class Movement {
     // --- vault: low ledge ahead while moving on the ground -> hop onto it (level geometry only; props block) --
     if (groundedNow && this.wallContact && this.wallContact.collider.tag === 'ground' && this.speedXZ > 3 && this.state !== 'slide') {
       const n = this.wallContact.normal;
-      if (-(this.velocity.x * n.x + this.velocity.z * n.z) > 2) {
+      if (-(preVx * n.x + preVz * n.z) > 2) {
         _tmp.set(this.position.x - n.x * 0.9, this.position.y + T.vaultMaxHeight + 0.3, this.position.z - n.z * 0.9);
         const hit = this.world.raycastDown(_tmp, T.vaultMaxHeight + 0.3);
         if (hit && hit.box.tag === 'ground') {
@@ -349,6 +366,30 @@ export class Movement {
             this.state = 'vault'; this.vaultTimer = 0.25;
             this.events.push('vault');
           }
+        }
+      }
+    }
+
+    // --- mantle: airborne and pressing into the side (or top corner) of level geometry just below its top ->
+    // pull up onto it. This is what makes "almost made it" jumps land instead of bonk-and-fall.
+    if (!groundedNow && ledge && this.state !== 'grapple' && this.state !== 'wallrun') {
+      const hl = Math.hypot(ledge.normal.x, ledge.normal.z);
+      const nx = hl > 1e-4 ? ledge.normal.x / hl : 0, nz = hl > 1e-4 ? ledge.normal.z / hl : 0;
+      const into = -(preVx * nx + preVz * nz);
+      const ledgeTop = ledge.collider.center.y + ledge.collider.half.y;
+      const below = ledgeTop - this.position.y;
+      if (hl > 1e-4 && into > 1 && below > 0.02 && below <= T.mantleHeight && this.velocity.y < 6) {
+        _tmp.set(this.position.x - nx * 0.8, ledgeTop + 0.5, this.position.z - nz * 0.8);
+        const hit = this.world.raycastDown(_tmp, 1.0);
+        if (hit && hit.box === ledge.collider) {
+          this.position.y = ledgeTop + 0.02;
+          this.position.x -= nx * 0.5; this.position.z -= nz * 0.5;
+          this.velocity.y = 0;
+          const sp = Math.max(this.speedXZ * 0.8, runSpeed * 0.6);
+          this.velocity.x = -nx * sp; this.velocity.z = -nz * sp;
+          this.state = 'vault'; this.vaultTimer = 0.2;
+          groundedNow = true;
+          this.events.push('vault');
         }
       }
     }
@@ -419,6 +460,7 @@ export class Movement {
     this.grappleAnchor = anchor.clone();
     this.grappleLen = Math.max(3, this.position.distance(anchor) * 0.92);
     this.grappleTimer = 0;
+    this.prevSwingVy = -99;
     this.state = 'grapple';
     _tmp.sub2(anchor, this.position).normalize();
     this.velocity.x += _tmp.x * 5; this.velocity.z += _tmp.z * 5;
