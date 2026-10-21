@@ -14,6 +14,21 @@ export class Hud {
   private lastEnergy = -1;
   private lastRift = -999;
   private promptShown = false;
+  private timer = document.getElementById('timer')!;
+  private lastTimer = '';
+  /** Wired by the game: the top-right pause button (the only way to pause on touch). */
+  onPause: (() => void) | null = null;
+
+  constructor() {
+    const b = document.getElementById('btn-pause');
+    b?.addEventListener('click', (e) => { e.preventDefault(); this.onPause?.(); });
+    b?.addEventListener('touchstart', (e) => { e.preventDefault(); this.onPause?.(); }, { passive: false });
+  }
+
+  setTimer(seconds: number): void {
+    const t = fmtTime(seconds);
+    if (t !== this.lastTimer) { this.timer.textContent = t; this.lastTimer = t; }
+  }
 
   /** Hide the whole HUD (title screen). */
   setVisible(v: boolean): void {
@@ -59,4 +74,11 @@ export class Hud {
   toggleDebug(): boolean { this.debug.hidden = !this.debug.hidden; return !this.debug.hidden; }
   get debugVisible(): boolean { return !this.debug.hidden; }
   setDebug(text: string): void { this.debug.textContent = text; }
+}
+
+/** m:ss.d */
+export function fmtTime(seconds: number): string {
+  const s = Math.max(0, seconds);
+  const m = Math.floor(s / 60), r = s - m * 60;
+  return `${m}:${r < 10 ? '0' : ''}${r.toFixed(1)}`;
 }

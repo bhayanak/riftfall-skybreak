@@ -1,4 +1,4 @@
-export type Action = 'jump' | 'dash' | 'grapple' | 'slide' | 'restart' | 'debug' | 'help' | 'mute' | 'pick1' | 'pick2' | 'pick3' | 'confirm';
+export type Action = 'jump' | 'dash' | 'grapple' | 'slide' | 'restart' | 'debug' | 'help' | 'pause' | 'mute' | 'pick1' | 'pick2' | 'pick3' | 'pick4' | 'confirm';
 
 const KEYS: Record<string, Action> = {
   Space: 'jump',
@@ -9,12 +9,14 @@ const KEYS: Record<string, Action> = {
   ControlLeft: 'slide',
   KeyR: 'restart',
   KeyH: 'help',
-  Escape: 'help',
+  Escape: 'pause',
+  KeyP: 'pause',
   KeyM: 'mute',
   Backquote: 'debug',
   Digit1: 'pick1',
   Digit2: 'pick2',
   Digit3: 'pick3',
+  Digit4: 'pick4',
   Enter: 'confirm',
 };
 
@@ -33,6 +35,8 @@ export class Input {
   private releasedNow = new Set<Action>();
   private touchMove = { x: 0, y: 0 };
   private pointerLocked = false;
+  /** Browsers swallow the Esc that exits pointer lock, so losing the lock is how desktop reaches the pause menu. */
+  onPointerLockLost: (() => void) | null = null;
   private lookTouchId: number | null = null;
   private lastTouch = { x: 0, y: 0 };
 
@@ -45,7 +49,9 @@ export class Input {
       if (!this.pointerLocked && !matchMedia('(pointer: coarse)').matches) canvas.requestPointerLock?.();
     });
     document.addEventListener('pointerlockchange', () => {
+      const was = this.pointerLocked;
       this.pointerLocked = document.pointerLockElement === canvas;
+      if (was && !this.pointerLocked) this.onPointerLockLost?.();
     });
     window.addEventListener('mousemove', (e) => {
       if (!this.pointerLocked) return;

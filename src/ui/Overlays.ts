@@ -1,7 +1,38 @@
 import type { Upgrade } from '../progression/Upgrade';
 import type { ShopItem, ItemKind } from '../progression/Shop';
+import type { SaveData } from '../progression/Save';
+import { fmtTime } from './Hud';
 
-export type StartChoice = 'play' | 'daily' | 'shop' | 'howto';
+export type StartChoice = 'play' | 'daily' | 'shop' | 'stats' | 'howto';
+export type PauseChoice = 'resume' | 'howto' | 'quit';
+export type VictoryChoice = 'again' | 'endless' | 'title';
+
+/** What the stage-clear screen reports before the upgrade pick. */
+export interface StageClearInfo {
+  stage: number;          // 0-based stage just cleared
+  total: number;          // campaign length
+  endless: boolean;
+  time: number;
+  coins: number;
+  rec: { bestTime: boolean; bestCoins: boolean; first: boolean } | null;
+  prevBestTime: number;   // 0 = none
+  prevBestCoins: number;
+  next: string;           // next biome name
+  wallet: number;
+}
+
+export interface RunSummary {
+  title: string;
+  reason: string;
+  distance: number;
+  stages: number;
+  total: number;
+  coins: number;
+  time: number;
+  bestFlow: number;
+  bestLine: string;
+  record: string;
+}
 
 /** What the shop UI needs from the game to render and act. */
 export interface ShopController {
@@ -40,24 +71,78 @@ export class Overlays {
   startScreen(o: { coins: number; best: string; daily: boolean; touch: boolean }): Promise<StartChoice> {
     this.show('RIFTFALL', 'SKYBREAK', `◎ ${o.coins.toLocaleString()} COINS · ${o.best}`, true);
     this.cards.innerHTML = '';
-    const defs: { key: string; icon: string; name: string; desc: string; choice: StartChoice }[] = [
-      { key: o.touch ? '' : 'SPACE', icon: '▶', name: 'RUN', desc: o.daily ? 'Daily route — same for everyone today' : 'New seeded route', choice: 'play' },
-      { key: o.touch ? '' : '2', icon: '☀', name: o.daily ? 'DAILY: ON' : 'DAILY: OFF', desc: 'Toggle the daily route', choice: 'daily' },
-      { key: o.touch ? '' : '3', icon: '◈', name: 'WARDROBE', desc: 'Suits, trails and powers for coins', choice: 'shop' },
-      { key: o.touch ? '' : 'H', icon: '?', name: 'HOW TO PLAY', desc: 'Controls', choice: 'howto' },
+    const defs: { key: string; icon: string; name: string; desc: string; choice: StartChoice; cls: string }[] = [
+      { key: o.touch ? '' : 'SPACE', icon: '▶', name: 'RUN', desc: o.daily ? 'Daily route — same for everyone today' : 'Escape the Rift — 9 stages', choice: 'play', cls: ' primary' },
+      { key: o.touch ? '' : '2', icon: '☀', name: o.daily ? 'DAILY: ON' : 'DAILY: OFF', desc: 'Toggle the daily route', choice: 'daily', cls: '' },
+      { key: o.touch ? '' : '3', icon: '◈', name: 'WARDROBE', desc: 'Suits, trails and powers', choice: 'shop', cls: '' },
+      { key: o.touch ? '' : '4', icon: '≡', name: 'STATS', desc: 'Records and totals', choice: 'stats', cls: ' minor' },
+      { key: o.touch ? '' : 'H', icon: '?', name: 'HOW TO PLAY', desc: 'Controls', choice: 'howto', cls: ' minor' },
     ];
     const choices = defs.map((d) => d.choice);
     defs.forEach((d, i) => {
       const el = document.createElement('button');
-      el.className = 'card' + (i === 0 ? ' primary' : i === 3 ? ' minor' : '');
+      el.className = 'card' + d.cls;
       el.innerHTML = `${d.key ? `<span class="key">${d.key}</span>` : ''}<span class="icon">${d.icon}</span><span class="name">${d.name}</span><span class="desc">${d.desc}</span>`;
       el.addEventListener('click', () => this.pick(i));
       el.addEventListener('pointerenter', () => this.setHover(i));
       this.cards.appendChild(el);
     });
     this.setHover(0);
-    this.primaryIndex = 0; this.escapeIndex = 3;
+    this.primaryIndex = 0; this.escapeIndex = null;
     return new Promise<number>((res) => { this.resolver = res; }).then((i) => choices[i]);
+  }
+
+  /** In-run pause. Esc / RESUME continues; QUIT keeps the coins earned so far. */
+  pauseMenu(o: { stage: number; total: number; endless: boolean; coins: number; touch: boolean }): Promise<PauseChoice> {
+    const where = o.endless ? `ENDLESS · STAGE ${o.stage + 1}` : `STAGE ${o.stage + 1} / ${o.total}`;
+    this.show('PAUSED', where, `◎ ${o.coins.toLocaleString()} COINS THIS RUN — BANKED IF YOU QUIT`, true);
+    this.cards.innerHTML = '';
+    const defs: [string, string, string, PauseChoice, string][] = [
+      [o.touch ? '' : 'SPACE', '▶', 'RESUME', 'resume', ' primary'],
+      [o.touch ? '' : 'H', '?', 'HOW TO PLAY', 'howto', ' minor'],
+      [o.touch ? '' : '3', '⌂', 'QUIT TO TITLE', 'quit', ' minor'],
+    ];
+    defs.forEach(([key, icon, name, , cls], i) => {
+      const el = document.createElement('button');
+      el.className = 'card single' + cls;
+      el.innerHTML = `${key ? `<span class="key">${key}</span>` : ''}<span class="icon">${icon}</span><span class="name">${name}</span>`;
+      el.addEventListener('click', () => this.pick(i));
+      this.cards.appendChild(el);
+    });
+    this.primaryIndex = 0; this.escapeIndex = 0;
+    return new Promise<number>((res) => { this.resolver = res; }).then((i) => defs[i][3]);
+  }
+
+  /** Lifetime records and the per-stage table. */
+  stats(d: SaveData, total: number, stageName: (i: number) => string): Promise<void> {
+    this.show('STATS', `${d.runs} RUN${d.runs === 1 ? '' : 'S'} · ${d.wins} ESCAPE${d.wins === 1 ? '' : 'S'}`, 'RECORDS ARE KEPT PER STAGE, PER RUN AND FOR LIFE', true);
+    this.cards.innerHTML = '';
+    const grid = document.createElement('div');
+    grid.className = 'stats-grid';
+    const cells: [string, string][] = [
+      [`◎ ${d.coins.toLocaleString()}`, 'COINS'], [`${d.bestStage} / ${total}`, 'MOST STAGES'], [`${d.bestDistance.toLocaleString()} m`, 'BEST DISTANCE'],
+      [`◎ ${d.bestEnergy.toLocaleString()}`, 'BEST RUN COINS'], [d.bestRunTime ? fmtTime(d.bestRunTime) : '—', 'FASTEST ESCAPE'], [fmtLong(d.totalTime), 'TIME PLAYED'],
+      [`${d.totalDistance.toLocaleString()} m`, 'TOTAL DISTANCE'], [`◎ ${d.totalCoins.toLocaleString()}`, 'COINS EARNED'],
+    ];
+    grid.innerHTML = cells.map(([v, l]) => `<div><b>${v}</b><span>${l}</span></div>`).join('');
+    this.cards.appendChild(grid);
+    const table = document.createElement('table');
+    table.className = 'stage-table';
+    let rows = '<tr><th>#</th><th>STAGE</th><th>BEST TIME</th><th>MOST COINS</th><th>CLEARS</th></tr>';
+    for (let i = 0; i < total; i++) {
+      const r = d.stages[String(i)];
+      const locked = i > d.bestStage;
+      rows += `<tr class="${r ? 'done' : locked ? 'locked' : ''}"><td>${r ? '✓' : i + 1}</td><td>${stageName(i)}${i === 3 ? ' · TITAN' : ''}</td><td>${r ? fmtTime(r.bestTime) : '—'}</td><td>${r ? '◎ ' + r.bestCoins.toLocaleString() : '—'}</td><td>${r ? r.clears : locked ? 'LOCKED' : '—'}</td></tr>`;
+    }
+    table.innerHTML = rows;
+    this.cards.appendChild(table);
+    const back = document.createElement('button');
+    back.className = 'card single minor';
+    back.innerHTML = `<span class="icon">←</span><span class="name">BACK</span>`;
+    back.addEventListener('click', () => this.pick(2));
+    this.cards.appendChild(back);
+    this.primaryIndex = 2; this.escapeIndex = 2;
+    return new Promise<number>((res) => { this.resolver = res; }).then(() => undefined);
   }
 
   /** Wardrobe + powers. Re-renders itself after every action; resolves when the player leaves. */
@@ -108,39 +193,70 @@ export class Overlays {
     return new Promise<number>((res) => { this.resolver = res; }).then(() => undefined);
   }
 
-  /** Resolves with the chosen index. Keyboard 1/2/3 handled by caller via pick(i). */
-  chooseUpgrade(biomeName: string, energy: number, options: Upgrade[]): Promise<number> {
-    this.show('RIFT BREACHED', `${biomeName} AHEAD · ENERGY ${energy}`, 'PICK ONE · PRESS 1 / 2 / 3 OR CLICK');
+  /** Stage cleared: time / coins vs. your records, then pick one upgrade (1/2/3, click, or Space on the hovered card). */
+  stageClear(info: StageClearInfo, options: Upgrade[]): Promise<number> {
+    const head = info.endless ? `ENDLESS · STAGE ${info.stage + 1} CLEARED` : `STAGE ${info.stage + 1} / ${info.total} CLEARED`;
+    const next = info.endless ? `NEXT: ${info.next}` : `NEXT: ${info.next} · STAGE ${info.stage + 2} / ${info.total}`;
+    this.show(head, next, `◎ ${info.wallet.toLocaleString()} COINS BANKED · PICK ONE UPGRADE · 1 / 2 / 3 OR CLICK`);
     this.cards.innerHTML = '';
+    const stats = document.createElement('div');
+    stats.className = 'clear-stats';
+    const t = info.rec?.first ? 'FIRST CLEAR' : info.rec?.bestTime ? 'NEW BEST' : info.prevBestTime ? `BEST ${fmtTime(info.prevBestTime)}` : '';
+    const c = info.rec?.first ? '' : info.rec?.bestCoins ? 'NEW BEST' : info.prevBestCoins ? `BEST ${info.prevBestCoins.toLocaleString()}` : '';
+    stats.innerHTML = `<div><b>${fmtTime(info.time)}</b><span>TIME</span><em>${t}</em></div><div><b>+${info.coins.toLocaleString()}</b><span>COINS</span><em>${c}</em></div>`;
+    this.cards.appendChild(stats);
     this.hovered = 0;
     options.forEach((u, i) => {
       const el = document.createElement('button');
       el.className = 'card';
       el.innerHTML = `<span class="key">${i + 1}</span><span class="icon">${u.icon}</span><span class="name">${u.name}</span><span class="desc">${u.desc}</span><span class="why">${u.why}</span>`;
-      el.addEventListener('click', () => this.pick(i));
-      el.addEventListener('pointerenter', () => this.setHover(i));
+      el.addEventListener('click', () => this.pick(i + 1));
+      el.addEventListener('pointerenter', () => this.setHover(i + 1));
       this.cards.appendChild(el);
     });
-    this.setHover(0);
-    this.primaryIndex = null; this.escapeIndex = null;   // Space picks the hovered card (see pickPrimary)
-    return new Promise((res) => { this.resolver = res; });
+    this.setHover(1);
+    this.primaryIndex = null; this.escapeIndex = null;
+    return new Promise<number>((res) => { this.resolver = res; }).then((i) => Math.max(0, i - 1));
+  }
+
+  /** Campaign complete. */
+  victory(o: { time: number; coins: number; bonus: number; distance: number; fastest: boolean; bestLine: string }): Promise<VictoryChoice> {
+    this.show('YOU ESCAPED THE RIFT', o.fastest ? 'FASTEST ESCAPE YET' : 'ALL 9 STAGES CLEARED', o.bestLine);
+    this.cards.innerHTML = '';
+    const stats = document.createElement('div');
+    stats.className = 'runstats';
+    stats.innerHTML = [[fmtTime(o.time), 'TIME'], [`+${o.coins.toLocaleString()}`, 'COINS'], [`+${o.bonus}`, 'ESCAPE BONUS'], [`${Math.round(o.distance)} m`, 'DISTANCE']]
+      .map(([v, l]) => `<div><b>${v}</b><span>${l}</span></div>`).join('');
+    this.cards.appendChild(stats);
+    const defs: [string, string, string, VictoryChoice, string][] = [
+      ['↻', 'RUN AGAIN', 'SPACE', 'again', ' primary'], ['∞', 'KEEP RUNNING', 'Endless — it only gets harder', 'endless', ''], ['⌂', 'TITLE', 'Wardrobe · Stats', 'title', ' minor'],
+    ];
+    defs.forEach(([icon, name, desc, , cls], i) => {
+      const el = document.createElement('button');
+      el.className = 'card single' + cls;
+      el.innerHTML = `<span class="icon">${icon}</span><span class="name">${name}</span><span class="desc">${desc}</span>`;
+      el.addEventListener('click', () => this.pick(i + 1));
+      this.cards.appendChild(el);
+    });
+    this.primaryIndex = 1; this.escapeIndex = 3;
+    return new Promise<number>((res) => { this.resolver = res; }).then((i) => defs[Math.max(0, i - 1)][3]);
   }
 
   /** Controls card. Resolves on any pick (Space / click / tap). */
   howToPlay(touch: boolean): Promise<number> {
-    this.show('RIFTFALL', 'HOW TO PLAY', touch ? 'TAP TO START' : 'PRESS SPACE TO START · H ANYTIME FOR THIS CARD');
+    this.show('RIFTFALL', 'HOW TO PLAY', touch ? 'TAP TO CONTINUE' : 'SPACE TO CONTINUE · ESC PAUSES · H SHOWS THIS CARD');
     this.cards.innerHTML = '';
     const rows: [string, string, string][] = touch
-      ? [['◉', 'MOVE', 'Left stick. Drag right side to look.'], ['JUMP', 'JUMP ×2', 'Hold for a full jump. Tap again in the air for a second jump.'],
+      ? [['◉', 'MOVE', 'Thumb anywhere on the lower-left. A short push is a full sprint. Drag right side to look.'], ['JUMP', 'JUMP ×2', 'Hold for a full jump. Tap again in the air for a second jump.'],
          ['LEDGE', 'GRAB', 'Land short? You grab the ledge and pull up. Glowing islands give way — keep moving.'],
          ['DASH', 'AIR DASH', 'Tap mid-jump to cross big gaps.'], ['GRAPPLE', 'GRAPPLE', 'When a ring glows gold, tap to swing. Tap again to let go.'],
          ['WALL', 'WALL-RUN', 'Jump towards a wall while moving. Jump again to leap off.'], ['SLIDE', 'SLIDE', 'Slide while sprinting for a burst of speed.'],
-         ['▲', 'THE RIFT', 'It chases you. Keep moving forward. Reach the portal.']]
+         ['▲', 'THE RIFT', 'It chases you. 9 stages to escape. Coins bank at every portal.'], ['❚❚', 'PAUSE', 'Top-right button: pause, controls, quit to title.']]
       : [['WASD', 'MOVE', 'Mouse to look (click once to capture).'], ['SPACE', 'JUMP ×2', 'Hold for a full jump. Press again in the air for a second jump.'],
          ['LEDGE', 'GRAB', 'Land short? You grab the ledge and pull up. Glowing islands give way — keep moving.'],
          ['SHIFT', 'AIR DASH', 'Press mid-jump to cross big gaps.'], ['E', 'GRAPPLE', 'When a ring glows gold, press E to swing. E again to let go.'],
          ['SPACE', 'WALL-RUN', 'Jump towards a wall while moving. Space again to leap off.'], ['C', 'SLIDE', 'Slide while sprinting for a burst of speed.'],
-         ['▲', 'THE RIFT', 'It chases you. Keep moving forward. Reach the portal.'], ['M', 'SOUND', 'Toggle music and effects. R restarts the run.']];
+         ['▲', 'THE RIFT', 'It chases you. 9 stages to escape. Coins bank at every portal.'], ['ESC', 'PAUSE', 'Pause, controls, quit to title. M sound · R restart.']];
     const list = document.createElement('div');
     list.className = 'howto';
     for (const [key, name, text] of rows) {
@@ -160,12 +276,12 @@ export class Overlays {
   }
 
   /** Run summary. Resolves 0 = run again, 1 = back to the title screen. */
-  runOver(reason: string, energy: number, bestFlow: number, distance: number, stage: number, bestLine: string, record: string): Promise<number> {
-    this.show(record || 'THE RIFT TOOK YOU', reason, bestLine);
+  runOver(r: RunSummary): Promise<number> {
+    this.show(r.record || r.title, r.reason, r.bestLine);
     this.cards.innerHTML = '';
     const stats = document.createElement('div');
     stats.className = 'runstats';
-    stats.innerHTML = [[`${Math.round(distance)} m`, 'DISTANCE'], [`${stage + 1}`, 'STAGE'], [`+${energy}`, 'COINS'], [`x${bestFlow}`, 'BEST FLOW']]
+    stats.innerHTML = [[`${r.stages} / ${r.total}`, 'STAGES'], [`${Math.round(r.distance)} m`, 'DISTANCE'], [`+${r.coins.toLocaleString()}`, 'COINS BANKED'], [fmtTime(r.time), 'TIME'], [`x${r.bestFlow}`, 'BEST FLOW']]
       .map(([v, l]) => `<div><b>${v}</b><span>${l}</span></div>`).join('');
     this.cards.appendChild(stats);
     const again = document.createElement('button');
@@ -208,7 +324,16 @@ export class Overlays {
     this.foot.textContent = foot;
     this.root.classList.toggle('light', light);
     this.root.hidden = false;
+    // every card needs the mouse; hand it back if the game had captured it
+    if (document.pointerLockElement) document.exitPointerLock();
   }
+}
+
+/** 1h 23m / 12m 05s */
+function fmtLong(seconds: number): string {
+  const s = Math.round(seconds);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
+  return h ? `${h}h ${m}m` : `${m}m ${r < 10 ? '0' : ''}${r}s`;
 }
 
 function css(c: { r: number; g: number; b: number }): string {

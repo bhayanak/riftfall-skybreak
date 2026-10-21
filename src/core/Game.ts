@@ -21,12 +21,15 @@ import { SHOP, byId, type ShopItem } from '../progression/Shop';
 import { Platform } from '../platform/Platform';
 import { Hud } from '../ui/Hud';
 import { TouchControls } from '../ui/TouchControls';
-import { Overlays, type ShopController } from '../ui/Overlays';
+import { Overlays, type ShopController, type StageClearInfo } from '../ui/Overlays';
 
 type Phase = 'loading' | 'menu' | 'playing' | 'portal' | 'upgrade' | 'dead';
 const BIOME_ORDER: BiomeId[] = ['sky', 'fire', 'void'];
 /** Stage at which the Rift Titan starts stalking the route. */
 const TITAN_STAGE = 3;
+/** A run is an escape across this many stages (3 loops of the 3 biomes); after that the player may keep running. */
+const CAMPAIGN_STAGES = 9;
+const ESCAPE_BONUS = 500;
 
 /** Same route for everyone on a given UTC day. */
 function dailySeed(): number {
@@ -76,9 +79,13 @@ export class Game {
   seed: number;
   daily: boolean;
   stage = 0;              // 0 sky, 1 fire, 2 void, 3 sky(harder)...
-  energy = 0;
+  energy = 0;             // coins earned in the current stage, not yet banked
   distance = 0;           // total this run, across stages
   private distanceBase = 0;
+  private runCoins = 0;        // banked this run (all stages)
+  private runTotalTime = 0;    // seconds across stages
+  private endless = false;     // past the campaign: no more stage records, no second victory
+  private recordedAt = { distance: 0, time: 0 };   // what recordRun() already counted (endless extension)
   private checkpoint = 0;
   private runTime = 0;
   private started = false;     // player has moved; the Rift clock runs from here
@@ -155,6 +162,8 @@ export class Game {
     this.env.attachPost(this.camera.entity.camera!);
     if (this.device.isTouch) new TouchControls(this.input);
     this.player.movement.anchorProvider = (pos, fwd, range) => this.gen.findAnchor(pos, fwd, range)?.pos ?? null;
+    this.hud.onPause = () => void this.pause();
+    this.input.onPointerLockLost = () => void this.pause();
 
     this.platform.loadingStop();
     await this.startRun(true, false);
@@ -165,8 +174,9 @@ export class Game {
   // ------------------------------------------------------------------------------------ title / shop
   private bestLine(): string {
     const s = this.save.data;
-    return `BEST ${s.bestDistance} m · STAGE ${s.bestStage + 1} · ${s.runs} RUN${s.runs === 1 ? '' : 'S'}`;
+    return `CLEARED ${s.bestStage} / ${CAMPAIGN_STAGES} · BEST ${s.bestDistance.toLocaleString()} m · ${s.wins} ESCAPE${s.wins === 1 ? '' : 'S'}`;
   }
+  private stageName(i: number): string { return BIOMES[BIOME_ORDER[i % BIOME_ORDER.length]].name; }
 
   /** Title screen loop: play / daily toggle / wardrobe / controls. Returns when a run launches. */
   private async menu(): Promise<void> {
@@ -182,6 +192,8 @@ export class Game {
         await this.startRun(true, false);
       } else if (choice === 'shop') {
         await this.overlays.shop(this.shopController(), this.device.isTouch);
+      } else if (choice === 'stats') {
+        await this.overlays.stats(this.save.data, CAMPAIGN_STAGES, (i) => this.stageName(i));
       } else {
         await this.overlays.howToPlay(this.device.isTouch);
         this.seenHowTo = true;
@@ -233,6 +245,7 @@ export class Game {
     const id = ++this.runId;
     if (fresh) {
       this.stage = 0; this.energy = 0; this.distance = 0; this.distanceBase = 0;
+      this.runCoins = 0; this.runTotalTime = 0; this.endless = false; this.recordedAt = { distance: 0, time: 0 };
       this.player.movement.stats = defaultStats();
       for (const p of this.ownedPowers()) p.apply?.(this.player.movement.stats);
       this.deck.reset();
@@ -255,7 +268,8 @@ export class Game {
     this.applyTrail(b);
     this.titan.setColor(b.rift);
     if (this.stage >= TITAN_STAGE) this.titan.start(this.gen.spawn); else this.titan.stop();
-    this.hud.setBiome(b.name + (this.daily ? ' · DAILY' : ''));
+    this.hud.setBiome(`${b.name} · ${this.endless ? `ENDLESS ${this.stage + 1}` : `STAGE ${this.stage + 1} / ${CAMPAIGN_STAGES}`}${this.daily ? ' · DAILY' : ''}`);
+    this.hud.setTimer(0);
     this.flow.decayMult = this.player.movement.stats.flowDecayMult;
     this.checkpoint = 0;
     this.runTime = 0;
@@ -307,7 +321,55 @@ export class Game {
     this.flow.reset();
     this.camera.kick(0.8);
     this.sfx.play('death', 0.6, 1.4);
-    this.hud.showHint('FELL · −25 ENERGY', 1.5);
+    this.hud.showHint('FELL · −25 COINS', 1.5);
+  }
+
+  /** Pause menu: resume / controls / quit to title (coins earned so far are banked). */
+  private async pause(): Promise<void> {
+    if (this.phase !== 'playing' || this.overlays.visible) return;
+    const id = this.runId;
+    this.platform.gameplayStop();
+    for (;;) {
+      const c = await this.overlays.pauseMenu({ stage: this.stage, total: CAMPAIGN_STAGES, endless: this.endless, coins: this.runCoins + this.energy, touch: this.device.isTouch });
+      if (id !== this.runId) return;
+      if (c === 'howto') { await this.overlays.howToPlay(this.device.isTouch); if (id !== this.runId) return; continue; }
+      if (c === 'quit') { await this.endRun('COINS BANKED · BACK TO THE TITLE', true); return; }
+      break;
+    }
+    this.input.endFrame();
+    this.platform.gameplayStart();
+  }
+
+  /** Bank what this stage earned. Returns the amount. */
+  private bankStage(): number {
+    const n = Math.max(0, Math.round(this.energy));
+    this.save.bankCoins(n);
+    this.runCoins += n;
+    this.energy = 0;
+    return n;
+  }
+
+  /** The run is over (death or quit): bank, record, show the summary, then run again or go to the title. */
+  private async endRun(reason: string, quit: boolean): Promise<void> {
+    const id = this.runId;
+    this.phase = 'dead';
+    this.platform.gameplayStop();
+    this.bankStage();
+    let record = '';
+    if (!this.endless) {
+      const beat = this.save.recordRun({ distance: this.distance, stages: this.stage, coins: this.runCoins, time: this.runTotalTime, won: false });
+      if (beat.distance || beat.stages) this.platform.happytime();
+      const newSuit = beat.unlocked.map((u) => byId(u)?.name).filter(Boolean)[0] ?? '';
+      record = newSuit ? `NEW SUIT UNLOCKED — ${newSuit}` : beat.distance ? 'NEW DISTANCE RECORD' : beat.stages ? 'NEW STAGE RECORD' : beat.coins ? 'MOST COINS IN A RUN' : '';
+    } else {
+      this.save.extendRun(this.distance, this.stage, this.distance - this.recordedAt.distance, this.runTotalTime - this.recordedAt.time);
+    }
+    const bestLine = `${this.bestLine()} · ◎ ${this.save.data.coins.toLocaleString()} COINS · SEED ${this.seed}${this.daily ? ' (DAILY)' : ''}`;
+    const choice = await this.overlays.runOver({ title: quit ? 'RUN ENDED' : 'THE RIFT TOOK YOU', reason, distance: this.distance, stages: this.stage, total: CAMPAIGN_STAGES, coins: this.runCoins, time: this.runTotalTime, bestFlow: this.flow.best, bestLine, record });
+    if (id !== this.runId) return;
+    this.sfx.play('ui_confirm', 0.8);
+    if (choice === 0) await this.startRun(true);
+    else { await this.startRun(true, false); await this.menu(); }
   }
 
   private async onPortal(): Promise<void> {
@@ -320,14 +382,25 @@ export class Game {
     this.vfx.emit(this.gen.portalPos, 60, 8, 0.4, 1.2, 1.5, 3);
     await new Promise((r) => setTimeout(r, 650));
     if (id !== this.runId) return;
+    // the stage is cleared: coins are banked now, records updated now — nothing depends on surviving the next one
+    const stageTime = this.runTime;
+    const prev = this.save.data.stages[String(this.stage)];
+    const stageCoins = this.bankStage();
+    const rec = this.endless ? null : this.save.recordStage(this.stage, stageTime, stageCoins);
+    if (rec?.bestTime && !rec.first) this.platform.happytime();
+    if (!this.endless && this.stage + 1 >= CAMPAIGN_STAGES) { await this.onVictory(id); return; }
+    await this.nextStage(id, { stage: this.stage, total: CAMPAIGN_STAGES, endless: this.endless, time: stageTime, coins: stageCoins, rec, prevBestTime: prev?.bestTime ?? 0, prevBestCoins: prev?.bestCoins ?? 0, next: this.stageName(this.stage + 1), wallet: this.save.data.coins });
+  }
+
+  /** Stage-clear card with the upgrade pick, then build the next stage. */
+  private async nextStage(id: number, info: StageClearInfo): Promise<void> {
     this.phase = 'upgrade';
     const rng = new Rng(this.seed ^ (this.stage * 2654435761));
     const options = this.deck.offer(rng, 3);
-    const nextName = BIOMES[BIOME_ORDER[(this.stage + 1) % BIOME_ORDER.length]].name;
     this.sfx.play('ui_select', 0.6);
-    const i = await this.overlays.chooseUpgrade(nextName, this.energy, options);
+    const i = await this.overlays.stageClear(info, options);
     if (id !== this.runId) return;
-    this.deck.take(options[i], this.player.movement.stats);
+    if (options[i]) this.deck.take(options[i], this.player.movement.stats);
     this.sfx.play('ui_confirm', 0.8);
     if (this.stage + 1 === TITAN_STAGE) this.platform.happytime();
     await this.platform.portalBreak(() => { this.sfx.muted = this.music.muted = true; }, () => { this.sfx.muted = this.music.muted = this.save.data.muted; });
@@ -337,25 +410,38 @@ export class Game {
     await this.startRun(false);
   }
 
+  /** All campaign stages cleared. The run is recorded here; KEEP RUNNING continues it as endless. */
+  private async onVictory(id: number): Promise<void> {
+    this.phase = 'dead';
+    this.save.bankCoins(ESCAPE_BONUS);
+    this.runCoins += ESCAPE_BONUS;
+    const beat = this.save.recordRun({ distance: this.distance, stages: CAMPAIGN_STAGES, coins: this.runCoins, time: this.runTotalTime, won: true });
+    this.recordedAt = { distance: this.distance, time: this.runTotalTime };
+    this.platform.happytime();
+    this.sfx.play('flow_up', 1, 1.2);
+    this.camera.pulse(20);
+    const bestLine = `${this.bestLine()} · ◎ ${this.save.data.coins.toLocaleString()} COINS`;
+    const choice = await this.overlays.victory({ time: this.runTotalTime, coins: this.runCoins - ESCAPE_BONUS, bonus: ESCAPE_BONUS, distance: this.distance, fastest: beat.time, bestLine });
+    if (id !== this.runId) return;
+    this.sfx.play('ui_confirm', 0.8);
+    if (choice === 'again') await this.startRun(true);
+    else if (choice === 'title') { await this.startRun(true, false); await this.menu(); }
+    else {
+      this.endless = true;
+      await this.nextStage(id, { stage: this.stage, total: CAMPAIGN_STAGES, endless: true, time: this.runTime, coins: 0, rec: null, prevBestTime: 0, prevBestCoins: 0, next: this.stageName(this.stage + 1), wallet: this.save.data.coins });
+    }
+  }
+
   private async onDeath(reason: string): Promise<void> {
     this.phase = 'dead';
-    const id = this.runId;
     this.platform.gameplayStop();
     this.sfx.play('death', 1);
     this.camera.kick(1.5);
     this.vfx.emit(this.player.movement.position, 50, 10, 0.4, 1, 1, 2);
+    const id = this.runId;
     await new Promise((r) => setTimeout(r, 900));
     if (id !== this.runId) return;
-    const beat = this.save.recordRun(this.distance, this.energy, this.stage);
-    if (beat.distance || beat.stage) this.platform.happytime();
-    const newSuit = beat.unlocked.map((u) => byId(u)?.name).filter(Boolean)[0] ?? '';
-    const best = `${this.bestLine()} · ◎ ${this.save.data.coins.toLocaleString()} COINS · SEED ${this.seed}${this.daily ? ' (DAILY)' : ''}`;
-    const record = newSuit ? `NEW SUIT UNLOCKED — ${newSuit}` : beat.distance ? 'NEW DISTANCE RECORD' : beat.stage ? 'NEW STAGE RECORD' : beat.energy ? 'NEW ENERGY RECORD' : '';
-    const choice = await this.overlays.runOver(reason, this.energy, this.flow.best, this.distance, this.stage, best, record);
-    if (id !== this.runId) return;
-    this.sfx.play('ui_confirm', 0.8);
-    if (choice === 0) await this.startRun(true);
-    else { await this.startRun(true, false); await this.menu(); }
+    await this.endRun(reason, false);
   }
 
   // ------------------------------------------------------------------------------------ frame
@@ -376,8 +462,9 @@ export class Game {
       if (input.wasPressed('pick1')) this.overlays.pick(0);
       else if (input.wasPressed('pick2')) this.overlays.pick(1);
       else if (input.wasPressed('pick3')) this.overlays.pick(2);
+      else if (input.wasPressed('pick4')) this.overlays.pick(3);
       else if (input.wasPressed('jump') || input.wasPressed('confirm')) this.overlays.pickPrimary();
-      else if (input.wasPressed('help')) this.overlays.pickEscape();
+      else if (input.wasPressed('pause') || input.wasPressed('help')) this.overlays.pickEscape();
       // keep the world alive behind the card (coins spin, portal breathes) but freeze the player/rift
       if (this.gen && this.player) this.gen.update(dt, this.player.movement.position);
       if (this.phase === 'menu' && this.player) {
@@ -403,11 +490,12 @@ export class Game {
 
     if (input.wasPressed('restart')) { void this.startRun(true); input.endFrame(); return; }
     if (input.wasPressed('debug')) this.hud.toggleDebug();
+    if (input.wasPressed('pause')) { void this.pause(); input.endFrame(); return; }
     if (input.wasPressed('help')) { void this.showHelp(); input.endFrame(); return; }
 
     const m = this.player.movement;
     if (!this.started && (Math.abs(input.move.x) + Math.abs(input.move.y) > 0.1 || input.wasPressed('jump'))) this.started = true;
-    if (this.started) this.runTime += dt;
+    if (this.started) { this.runTime += dt; this.runTotalTime += dt; }
     this.riftGrace = Math.max(0, this.riftGrace - dt);
     // ride drifting islands: the collider moved under us this frame, so move with it
     m.position.x += this.gen.builder.carry(m.groundBox);
@@ -510,7 +598,8 @@ export class Game {
     }
 
     this.hud.setFlow(this.flow.multiplier, this.flow.progress01);
-    this.hud.setEnergy(this.energy);
+    this.hud.setEnergy(this.runCoins + Math.round(this.energy));
+    this.hud.setTimer(this.runTime);
     this.hud.update(dt);
 
     this.fpsAcc += dt; this.fpsFrames++;
