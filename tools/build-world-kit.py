@@ -227,6 +227,25 @@ if WHAT & {"player", "all"}:
                export_texcoords=True, export_normals=True, export_materials="EXPORT",
                export_image_format="JPEG", export_jpeg_quality=80)
 
+# ------------------------------------------------------------------------------------------- titan
+if WHAT & {"titan", "all"}:
+    src = glob.glob(os.path.join(Q, "ultimate-monsters", "Flying", "glTF", "Dragon_Evolved.gltf"))
+    if not src:
+        log("MISSING titan source")
+    else:
+        reset()
+        bpy.ops.import_scene.gltf(filepath=src[0])
+        force_opaque()
+        resize_images(512)
+        # keep only the clips we drive: hover, dash-in, and the slam
+        keep = {"Flying_Idle", "Fast_Flying", "Headbutt"}
+        for a in list(bpy.data.actions):
+            if a.name not in keep: bpy.data.actions.remove(a)
+        export_glb(os.path.join(OUT, "world", "titan.glb"),
+                   export_animations=True, export_skins=True, export_def_bones=False, export_nla_strips=False,
+                   export_texcoords=True, export_normals=True, export_materials="EXPORT",
+                   export_image_format="JPEG", export_jpeg_quality=80)
+
 # ------------------------------------------------------------------------------------------- world
 if WHAT & {"world", "all"}:
     for rel, src in WORLD.items():

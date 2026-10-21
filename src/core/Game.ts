@@ -26,6 +26,13 @@ type Phase = 'loading' | 'playing' | 'portal' | 'upgrade' | 'dead';
 const BIOME_ORDER: BiomeId[] = ['sky', 'fire', 'void'];
 /** Stage at which the Rift Titan starts stalking the route. */
 const TITAN_STAGE = 3;
+/** Runner suits, unlocked by the best stage ever reached (index = stages cleared). */
+const SUITS: { name: string; suit: pc.Color; accent: pc.Color }[] = [
+  { name: 'SKYRUNNER', suit: new pc.Color(0.055, 0.075, 0.16), accent: new pc.Color(0.10, 0.62, 0.66) },
+  { name: 'EMBER', suit: new pc.Color(0.16, 0.05, 0.05), accent: new pc.Color(0.95, 0.55, 0.15) },
+  { name: 'VOIDWALKER', suit: new pc.Color(0.09, 0.05, 0.16), accent: new pc.Color(0.75, 0.35, 1.0) },
+  { name: 'TITANSLAYER', suit: new pc.Color(0.85, 0.85, 0.88), accent: new pc.Color(1.0, 0.8, 0.3) },
+];
 
 /** Seed from the URL (?seed=123 or ?daily), else random. */
 function pickSeed(): { seed: number; daily: boolean } {
@@ -81,6 +88,7 @@ export class Game {
   private drawCalls = 0;
   private seenHowTo = false;
   private helpOpen = false;
+  private collapsing = false;
 
   private constructor(app: pc.AppBase, canvas: HTMLCanvasElement, device: DeviceInfo) {
     this.app = app;
@@ -135,11 +143,13 @@ export class Game {
     this.env = new Environment(this.app, this.assets, this.device);
     this.gen = new WorldGenerator(this.app, this.assets, this.world);
     this.rift = new Rift(this.app);
-    this.titan = new Titan(this.app);
+    this.titan = new Titan(this.app, this.assets);
     this.titan.onTelegraph = () => { this.hud.showHint('TITAN SLAM INCOMING — THE MARKED ISLAND WILL SINK', 2.5); this.sfx.play('land_hard', 0.5, 0.5); };
     this.titan.onSlam = (isl) => { this.gen.builder.slam(isl); this.camera.kick(1.2); this.sfx.play('land_hard', 1, 0.6); this.vfx.emit(new pc.Vec3(isl.x, isl.top + 0.5, isl.z), 40, 9, 0.5, 1.2, 1.5, 4); };
     this.vfx = new VFX(this.app, this.device.profile === 'mobile-low' ? 60 : 160);
     this.player = new Player(this.app, this.assets, this.world);
+    this.applySuit();
+    this.gen.builder.quality = this.device.profile === 'mobile-low' ? 0.5 : this.device.profile === 'mobile-high' ? 0.75 : 1;
     this.camera = new CameraRig(this.app, this.device.isMobile, this.world);
     this.env.attachPost(this.camera.entity.camera!);
     if (this.device.isTouch) new TouchControls(this.input);
@@ -151,6 +161,8 @@ export class Game {
 
   // ------------------------------------------------------------------------------------ run flow
   private biome() { return BIOMES[BIOME_ORDER[this.stage % BIOME_ORDER.length]]; }
+  private suitIndex(): number { return Math.min(SUITS.length - 1, this.save.data.bestStage); }
+  private applySuit(): void { const s = SUITS[this.suitIndex()]; this.player.setSuit(s.suit, s.accent); }
 
   private async startRun(fresh: boolean): Promise<void> {
     this.phase = 'loading';
@@ -183,6 +195,7 @@ export class Game {
     this.runTime = 0;
     this.started = false;
     this.riftGrace = 0;
+    this.collapsing = false;
     this.player.movement.respawn(this.gen.spawn);
     this.player.movement.events.length = 0;
     this.camera.snapTo(this.gen.spawn, 0);
@@ -258,11 +271,14 @@ export class Game {
     this.vfx.emit(this.player.movement.position, 50, 10, 0.4, 1, 1, 2);
     await new Promise((r) => setTimeout(r, 900));
     if (id !== this.runId) return;
+    const prevSuit = this.suitIndex();
     const beat = this.save.recordRun(this.distance, this.energy, this.stage);
     if (beat.distance || beat.stage) this.platform.happytime();
+    const newSuit = this.suitIndex() > prevSuit ? SUITS[this.suitIndex()].name : '';
+    if (newSuit) this.applySuit();
     const s = this.save.data;
     const best = `BEST ${s.bestDistance} m · STAGE ${s.bestStage + 1} · ${s.runs} RUN${s.runs === 1 ? '' : 'S'} · SEED ${this.seed}${this.daily ? ' (DAILY)' : ''}`;
-    const record = beat.distance ? 'NEW DISTANCE RECORD' : beat.stage ? 'NEW STAGE RECORD' : beat.energy ? 'NEW ENERGY RECORD' : '';
+    const record = newSuit ? `NEW SUIT — ${newSuit}` : beat.distance ? 'NEW DISTANCE RECORD' : beat.stage ? 'NEW STAGE RECORD' : beat.energy ? 'NEW ENERGY RECORD' : '';
     await this.overlays.runOver(reason, this.energy, this.flow.best, this.distance, this.stage, best, record);
     if (id !== this.runId) return;
     this.sfx.play('ui_confirm', 0.8);
@@ -329,9 +345,19 @@ export class Game {
     this.hud.setPrompt(target ? (this.device.isTouch ? 'GRAPPLE · TAP' : 'E · GRAPPLE') : m.state === 'grapple' ? (this.device.isTouch ? 'GRAPPLE · LET GO' : 'E · LET GO') : null);
     this.distance = Math.max(this.distance, this.distanceBase + Math.max(0, this.gen.spawn.z - m.position.z));
 
-    // rift pressure: starts 3 s after the first move, ramps with stage and time; paused briefly after a fall
+    // rift pressure: starts 3 s after the first move, ramps with stage and time; paused briefly after a fall.
+    // Portal Collapse: once you are three islands from the portal the Rift surges — a final sprint.
+    if (!this.collapsing && m.position.z < this.gen.collapseZ) {
+      this.collapsing = true;
+      this.hud.showHint('THE PORTAL IS COLLAPSING — SPRINT', 3);
+      this.sfx.play('land_hard', 0.8, 0.4);
+      this.camera.kick(1);
+      this.camera.pulse(14);
+    }
     const base = 3.6 + this.stage * 0.7;
-    const riftSpeed = (!this.started || this.runTime < 3 || this.riftGrace > 0 ? 0 : Math.min(base + 2.5, base + this.runTime * 0.05)) * m.stats.riftSlow;
+    let riftSpeed = (!this.started || this.runTime < 3 || this.riftGrace > 0 ? 0 : Math.min(base + 2.5, base + this.runTime * 0.05)) * m.stats.riftSlow;
+    // during the collapse the Rift runs just faster than you can: stopping is fatal, moving forward is not
+    if (this.collapsing && riftSpeed > 0) riftSpeed = Math.max(riftSpeed, 10.5 * m.stats.riftSlow);
     this.rift.speed = riftSpeed;
     this.rift.update(dt, m.position.z, m.position.y);
     this.gen.riftSweep(this.rift.z);

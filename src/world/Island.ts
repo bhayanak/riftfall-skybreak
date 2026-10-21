@@ -84,7 +84,10 @@ export class IslandBuilder {
   private trees: WorldModel[] = TREE_SETS.sky;
   private small: WorldModel[] = SMALL_SETS.sky;
   private crumbleMat!: pc.StandardMaterial;
+  private topMat: pc.StandardMaterial | null = null;
   private t = 0;
+  /** 0..1 decoration multiplier (mobile profiles place fewer props). */
+  quality = 1;
 
   constructor(app: pc.AppBase, private assets: Assets, private world: CollisionWorld, public rng: Rng) {
     app.root.addChild(this.root);
@@ -98,6 +101,22 @@ export class IslandBuilder {
     this.biomeTint = b.id === 'sky' ? null : b.stone;
     this.trees = TREE_SETS[b.id] ?? TREE_SETS.sky;
     this.small = SMALL_SETS[b.id] ?? SMALL_SETS.sky;
+    // walkable top: scorched rock with ember glow in the Fire Rift, glassy ice in the Void
+    if (b.id === 'fire') {
+      this.topMat = flat(new pc.Color(0.16, 0.08, 0.06), 0.35);
+      this.topMat.emissive = b.rift.clone().mulScalar(0.12); this.topMat.update();
+    } else if (b.id === 'void') {
+      this.topMat = flat(new pc.Color(0.52, 0.62, 0.86), 0.85);
+      this.topMat.emissive = new pc.Color(0.08, 0.06, 0.16); this.topMat.update();
+    } else this.topMat = null;
+  }
+
+  /** Swap the kit's grass material on an island body for the biome top. */
+  private applyTop(body: pc.Entity): void {
+    if (!this.topMat) return;
+    for (const r of body.findComponents('render') as pc.RenderComponent[]) {
+      for (const mi of r.meshInstances) if (mi.material?.name === 'IslandGrass') mi.material = this.topMat;
+    }
   }
 
   clear(): void {
@@ -127,6 +146,7 @@ export class IslandBuilder {
     body.setLocalEulerAngles(0, this.rng.int(2) * 180, 0);
     body.setLocalPosition(0, -m.h * sy, 0);
     if (this.biomeTint) this.tint(body, this.biomeTint);
+    this.applyTop(body);
     root.addChild(body);
     occluders.push(this.world.addOccluder(new BoxCollider(new pc.Vec3(s.x, s.top - bodyH * 0.5, s.z), new pc.Vec3(s.w, bodyH, s.d))));
     if (s.w * s.d > 60) {
@@ -141,9 +161,9 @@ export class IslandBuilder {
 
     const isl: Island = { root, colliders, occluders, x: s.x, z: s.z, top: s.top, w: s.w, d: s.d, falling: 0 };
     // decoration
-    const density = s.decor ?? 0.5;
+    const density = (s.decor ?? 0.5) * this.quality;
     if (density > 0) this.decorate(root, s, density, isl);
-    if (s.ruins) this.ruins(root, s, isl);
+    if (s.ruins && this.quality > 0.4) this.ruins(root, s, isl);
 
     this.islands.push(isl);
     return isl;

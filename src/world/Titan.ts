@@ -1,11 +1,12 @@
 import * as pc from 'playcanvas';
-import { emissive, flat, type Island } from './Island';
+import { emissive, type Island } from './Island';
 import type { WorldGenerator } from './WorldGenerator';
+import type { Assets } from '../core/Assets';
 
 /**
- * The Rift Titan: a storm-eye that stalks the route from stage 3 on and slams islands ahead of the player.
- * It is pressure, not a fight: a slam is telegraphed for ~1.4 s (ring on the island + hint), then that island
- * starts sinking slowly, so a quick player can still use it while a slow one has to find another way.
+ * The Rift Titan: a storm-dragon that stalks the route from stage 4 on and slams islands ahead of the player.
+ * It is pressure, not a fight: a slam is telegraphed for ~1.4 s (ring on the island + hint + dive), then that
+ * island starts sinking slowly, so a quick player can still use it while a slow one has to find another way.
  */
 export class Titan {
   readonly entity = new pc.Entity('titan');
@@ -13,43 +14,35 @@ export class Titan {
   onTelegraph: ((isl: Island) => void) | null = null;
   onSlam: ((isl: Island) => void) | null = null;
 
-  private core: pc.Entity;
-  private eye: pc.Entity;
-  private shards: pc.Entity[] = [];
+  private model: pc.Entity;
+  private anim: pc.AnimComponent;
   private ring: pc.Entity;
   private light: pc.Entity;
-  private eyeMat: pc.StandardMaterial;
   private ringMat: pc.StandardMaterial;
   private t = 0;
   private cooldown = 6;
   private target: Island | null = null;
   private telegraph = 0;
   private pos = new pc.Vec3();
+  private look = new pc.Vec3();
+  private clip = '';
 
-  constructor(app: pc.AppBase) {
-    this.core = new pc.Entity('core');
-    this.core.addComponent('render', { type: 'sphere', material: flat(new pc.Color(0.05, 0.04, 0.08), 0.6) });
-    this.core.setLocalScale(5, 5, 5);
-    this.entity.addChild(this.core);
-
-    this.eyeMat = emissive(new pc.Color(1, 0.4, 0.2), 6);
-    this.eye = new pc.Entity('eye');
-    this.eye.addComponent('render', { type: 'sphere', material: this.eyeMat });
-    this.eye.setLocalScale(1.8, 1.8, 1.8);
-    this.eye.setLocalPosition(0, 0, 2.0);
-    this.entity.addChild(this.eye);
-
-    const shardMat = flat(new pc.Color(0.12, 0.1, 0.16), 0.5);
-    for (let i = 0; i < 9; i++) {
-      const s = new pc.Entity('shard');
-      s.addComponent('render', { type: 'box', material: shardMat });
-      s.setLocalScale(0.6 + Math.random() * 0.6, 1.6 + Math.random() * 1.8, 0.6 + Math.random() * 0.6);
-      this.entity.addChild(s);
-      this.shards.push(s);
+  constructor(app: pc.AppBase, assets: Assets) {
+    this.model = assets.spawn('titan');
+    this.model.setLocalScale(3.2, 3.2, 3.2);
+    this.model.setLocalEulerAngles(0, 180, 0);   // kit models face +Z; lookAt points -Z at the target
+    for (const r of this.model.findComponents('render') as pc.RenderComponent[]) r.castShadows = false;
+    this.entity.addChild(this.model);
+    this.anim = this.model.addComponent('anim', { activate: true }) as pc.AnimComponent;
+    for (const a of assets.get('titan').animations) {
+      const track = a.resource as pc.AnimTrack;
+      this.anim.assignAnimation(track.name, track, undefined, 1, track.name !== 'Headbutt');
     }
+    this.play('Flying_Idle');
 
     this.light = new pc.Entity('glow');
     this.light.addComponent('light', { type: 'point', color: new pc.Color(1, 0.5, 0.3), intensity: 4, range: 40, castShadows: false });
+    this.light.setLocalPosition(0, 2, 2);
     this.entity.addChild(this.light);
 
     this.ringMat = emissive(new pc.Color(1, 0.3, 0.2), 3, 0.9, true);
@@ -63,8 +56,13 @@ export class Titan {
     app.root.addChild(this.entity);
   }
 
+  private play(name: string): void {
+    if (this.clip === name) return;
+    this.clip = name;
+    this.anim.baseLayer?.transition(name, 0.2);
+  }
+
   setColor(c: pc.Color): void {
-    this.eyeMat.emissive = c; this.eyeMat.update();
     this.ringMat.emissive = c; this.ringMat.update();
     this.light.light!.color = c;
   }
@@ -77,6 +75,7 @@ export class Titan {
     this.ring.enabled = false;
     this.pos.set(spawn.x + 20, spawn.y + 14, spawn.z - 10);
     this.entity.setPosition(this.pos);
+    this.play('Flying_Idle');
   }
 
   stop(): void {
@@ -89,19 +88,15 @@ export class Titan {
   update(dt: number, player: pc.Vec3, gen: WorldGenerator, playing: boolean): void {
     if (!this.active) return;
     this.t += dt;
-    // hover ahead and to one side, drifting across the route; look at the player
+    // hover ahead and to one side, drifting across the route; dive toward the marked island during a telegraph
     const sx = Math.sin(this.t * 0.22) * 16;
-    const want = new pc.Vec3(player.x + sx, player.y + 10 + Math.sin(this.t * 1.1) * 0.8, player.z - 22);
-    this.pos.lerp(this.pos, want, 1 - Math.exp(-dt * 1.4));
+    const want = this.target
+      ? new pc.Vec3(this.target.x, this.target.top + 6, this.target.z + 3)
+      : new pc.Vec3(player.x + sx, player.y + 10 + Math.sin(this.t * 1.1) * 0.8, player.z - 22);
+    this.pos.lerp(this.pos, want, 1 - Math.exp(-dt * (this.target ? 3 : 1.4)));
     this.entity.setPosition(this.pos);
-    this.entity.lookAt(player);
-    const pulse = 1 + Math.sin(this.t * 3) * 0.08 + (this.target ? 0.25 : 0);
-    this.eye.setLocalScale(1.8 * pulse, 1.8 * pulse, 1.8 * pulse);
-    this.shards.forEach((s, i) => {
-      const a = this.t * (0.6 + i * 0.07) + i * 0.7, r = 4.2 + Math.sin(this.t * 0.9 + i) * 0.6;
-      s.setLocalPosition(Math.cos(a) * r, Math.sin(a * 1.3 + i) * 2.2, Math.sin(a) * r);
-      s.setLocalEulerAngles(this.t * 40 + i * 30, this.t * 25, i * 20);
-    });
+    if (this.target) this.look.set(this.target.x, this.target.top, this.target.z); else this.look.copy(player);
+    this.entity.lookAt(this.look);
 
     if (!playing) return;
     if (this.target) {
@@ -115,6 +110,7 @@ export class Titan {
         this.target = null;
         this.ring.enabled = false;
         this.cooldown = 7 + Math.random() * 4;
+        this.play('Flying_Idle');
       }
     } else {
       this.cooldown -= dt;
@@ -125,9 +121,10 @@ export class Titan {
           this.telegraph = 1.4;
           this.ring.setPosition(isl.x, isl.top + 0.3, isl.z);
           this.ring.enabled = true;
+          this.play('Headbutt');
           this.onTelegraph?.(isl);
         } else this.cooldown = 1.2;
-      }
+      } else this.play(this.cooldown < 2.5 ? 'Fast_Flying' : 'Flying_Idle');
     }
   }
 }

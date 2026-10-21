@@ -10,6 +10,7 @@ export const WORLD_MODELS = [
   'coin', 'gem_blue', 'gem_pink', 'star',
   'ruin_arch_round', 'ruin_arch_gothic', 'ruin_column_round', 'ruin_column_short', 'ruin_wall_broken', 'ruin_wall_overgrown',
   'ruin_wall_arch_broken', 'ruin_floor', 'ruin_stairs', 'ruin_statue_stag', 'ruin_torch', 'ruin_flag', 'ruin_bridge',
+  'titan',
 ] as const;
 export type WorldModel = (typeof WORLD_MODELS)[number];
 

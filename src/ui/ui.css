@@ -103,6 +103,10 @@ canvas#game { position: fixed; inset: 0; width: 100%; height: 100%; display: blo
   font-size: clamp(12px, 2vmin, 16px); pointer-events: none; text-shadow: 0 0 10px rgba(255,200,100,0.6);
 }
 #prompt[hidden] { display: none; }
+#version {
+  position: fixed; right: max(10px, env(safe-area-inset-right)); bottom: max(8px, env(safe-area-inset-bottom));
+  font-size: 10px; letter-spacing: 0.12em; color: var(--hud-dim); opacity: 0.7; pointer-events: none; z-index: 20;
+}
 
 #debug {
   position: fixed; top: calc(52px + var(--safe-t)); left: calc(14px + var(--safe-l)); margin: 0;

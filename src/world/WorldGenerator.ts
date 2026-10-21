@@ -24,7 +24,7 @@ export interface Checkpoint { index: number; spawn: pc.Vec3; }
 /** A one-time on-screen tip that fires when the player passes z. */
 export interface HintMarker { z: number; text: string; touch: string; shown: boolean; }
 
-type ChunkName = 'hop' | 'stairs' | 'zigzag' | 'dashgap' | 'pillars' | 'descend' | 'bridge' | 'canyon' | 'canyonGap' | 'wallrun' | 'grapple' | 'crumble' | 'drift';
+type ChunkName = 'hop' | 'stairs' | 'zigzag' | 'dashgap' | 'pillars' | 'descend' | 'bridge' | 'canyon' | 'canyonGap' | 'wallrun' | 'grapple' | 'crumble' | 'drift' | 'fork';
 
 const CHUNK_HINTS: Partial<Record<ChunkName, [string, string]>> = {
   hop: ['HOLD SPACE FOR A FULL JUMP. LANDED SHORT? YOU GRAB THE LEDGE AND PULL UP', 'HOLD JUMP FOR A FULL JUMP. SHORT? YOU GRAB THE LEDGE'],
@@ -39,6 +39,7 @@ const CHUNK_HINTS: Partial<Record<ChunkName, [string, string]>> = {
   descend: ['DROP DOWN — JUMP OFF THE EDGE, SPACE AGAIN MID-AIR IF SHORT', 'DROP DOWN — JUMP OFF THE EDGE, JUMP AGAIN IF SHORT'],
   crumble: ['GLOWING GROUND GIVES WAY — DO NOT STOP', 'GLOWING GROUND GIVES WAY — DO NOT STOP'],
   drift: ['DRIFTING ISLAND — TIME YOUR JUMP', 'DRIFTING ISLAND — TIME YOUR JUMP'],
+  fork: ['TWO WAYS — THE HIGH ROAD HAS MORE COINS', 'TWO WAYS — THE HIGH ROAD HAS MORE COINS'],
 };
 
 /** One hop of the route as seen by the validator. */
@@ -47,7 +48,7 @@ export interface RouteEdge { from: number; to: number; d: number; h: number; mov
 /** Intended way across for each template, used by the validator as the ceiling a gap may demand. */
 const INTENDED: Record<ChunkName, Move | 'wall' | 'grapple'> = {
   hop: 'jump', stairs: 'jump', zigzag: 'jump', dashgap: 'dash', pillars: 'jump', descend: 'jump', bridge: 'run',
-  canyon: 'jump', canyonGap: 'wall', wallrun: 'wall', grapple: 'grapple', crumble: 'jump', drift: 'jump',
+  canyon: 'jump', canyonGap: 'wall', wallrun: 'wall', grapple: 'grapple', crumble: 'jump', drift: 'jump', fork: 'djump',
 };
 
 interface Cursor { x: number; y: number; z: number; }
@@ -77,7 +78,11 @@ export class WorldGenerator {
   private via = new Map<Island, 'wall' | 'grapple'>();
   /** Chunk each island belongs to (for the validator's intended-move ceiling). */
   private chunkOf = new Map<Island, ChunkName>();
+  /** Side-branch islands (fork) → the trunk island they are entered from; exits are validated to the next trunk island. */
+  private alt = new Map<Island, Island>();
   private stage = 0;
+  /** z at which the Portal Collapse begins (the last few islands before the portal). */
+  collapseZ = -Infinity;
   lastReport: RouteEdge[] = [];
 
   constructor(app: pc.AppBase, private assets: Assets, world: CollisionWorld) {
@@ -94,6 +99,7 @@ export class WorldGenerator {
     this.hints.length = 0;
     this.via.clear();
     this.chunkOf.clear();
+    this.alt.clear();
     this.stage = stage;
     this.builder.setBiome(biome);
     this.coinMat = coinMaterial();
@@ -121,6 +127,9 @@ export class WorldGenerator {
     // portal island
     const pw = 16;
     cur.z -= 5;
+    // Portal Collapse: the Rift surges once you are three islands from the portal
+    const isl = this.builder.islands;
+    this.collapseZ = isl.length >= 3 ? isl[isl.length - 3].z : cur.z + 20;
     this.builder.island({ x: cur.x, top: cur.y, z: cur.z - pw / 2, w: pw, d: pw, decor: 0.35, ruins: true });
     this.addCheckpoint(cur.x, cur.y, cur.z - 2);
     this.buildPortal(cur.x, cur.y, cur.z - pw / 2 - 2, biome);
@@ -136,18 +145,32 @@ export class WorldGenerator {
    * more than its template intends (or nothing at all) is a generator bug worth logging. Returns every edge.
    */
   validate(): RouteEdge[] {
-    const isl = this.builder.islands;
+    const all = this.builder.islands;
     const out: RouteEdge[] = [];
-    for (let i = 0; i + 1 < isl.length; i++) {
-      const a = isl[i], b = isl[i + 1];
+    const edge = (i: number, j: number) => {
+      const a = all[i], b = all[j];
       const tx = pc.math.clamp(b.x, a.x - a.w / 2, a.x + a.w / 2);
       const lx = pc.math.clamp(tx, b.x - b.w / 2, b.x + b.w / 2);
       const dz = Math.max(0, (a.z - a.d / 2) - (b.z + b.d / 2));
       const d = Math.hypot(lx - tx, dz);
       const h = b.top - a.top;
       const aid = this.via.get(b);
-      const move = aid ?? neededMove(d, h);
-      out.push({ from: i, to: i + 1, d: +d.toFixed(1), h: +h.toFixed(1), move });
+      out.push({ from: i, to: j, d: +d.toFixed(1), h: +h.toFixed(1), move: aid ?? neededMove(d, h) });
+    };
+    // trunk: consecutive non-alt islands; each alt island must be reachable from the trunk island before it
+    // and must reach the trunk island after it
+    let prev = -1;
+    for (let i = 0; i < all.length; i++) {
+      const entry = this.alt.get(all[i]);
+      if (entry) {
+        const ei = all.indexOf(entry);
+        if (ei >= 0) edge(ei, i);
+        let next = i + 1; while (next < all.length && this.alt.has(all[next])) next++;
+        if (next < all.length) edge(i, next);
+        continue;
+      }
+      if (prev >= 0) edge(prev, i);
+      prev = i;
     }
     return out;
   }
@@ -286,6 +309,7 @@ export class WorldGenerator {
       case 'grapple': return this.grapple(cur, d);
       case 'crumble': return this.crumble(cur, d);
       case 'drift': return this.drift(cur, d);
+      case 'fork': return this.fork(cur, d);
     }
   }
 
@@ -296,8 +320,8 @@ export class WorldGenerator {
       return teach.slice(0, n);
     }
     const easy: ChunkName[] = ['hop', 'stairs', 'zigzag', 'bridge', 'pillars'];
-    const mid: ChunkName[] = ['dashgap', 'canyon', 'grapple', 'descend', 'crumble', 'drift'];
-    const hard: ChunkName[] = ['wallrun', 'grapple', 'dashgap', 'canyonGap', 'crumble'];
+    const mid: ChunkName[] = ['dashgap', 'canyon', 'grapple', 'descend', 'crumble', 'drift', 'fork'];
+    const hard: ChunkName[] = ['wallrun', 'grapple', 'dashgap', 'canyonGap', 'crumble', 'fork'];
     const out: ChunkName[] = ['hop', 'stairs'];
     let last: ChunkName = 'stairs';
     for (let i = 2; i < n; i++) {
@@ -533,6 +557,28 @@ export class WorldGenerator {
     this.isl(cur, 8, 7, { ruins: this.rng.chance(0.5) });
   }
 
+  /** split path: a safe low road (trunk) and a higher side road with more coins; both rejoin ahead */
+  protected fork(cur: Cursor, d: number): void {
+    const side = this.rng.chance(0.5) ? -1 : 1;
+    const dx = 4.5, rise = 1.3, len = 7;
+    const g1 = this.fit('jump', 3.5 + Math.min(1.5, d), 0);
+    const entry = this.builder.islands[this.builder.islands.length - 1];
+    this.gap(cur, g1);
+    const z0 = cur.z;
+    // low road on the trunk
+    this.isl(cur, 6, len, { decor: 0.3 });
+    this.gemsLine(cur.x, cur.y, z0 - 1, cur.x, cur.y, z0 - len + 1, 2);
+    // high road beside it, reached with a double jump from the island before the fork
+    const hz = z0 - len / 2;
+    const high = this.builder.island({ x: cur.x + side * dx, top: cur.y + rise, z: hz, w: 5, d: len, decor: 0.2 });
+    this.alt.set(high, entry);
+    this.chunkOf.set(high, 'fork');
+    this.gemsLine(cur.x + side * dx, cur.y + rise, hz + 2.5, cur.x + side * dx, cur.y + rise, hz - 2.5, 4, 0.6);
+    // rejoin: wide island both roads can reach (the high road drops onto it)
+    this.gap(cur, this.fit('jump', 3.5, 0, dx));
+    this.isl(cur, 9, 7, { ruins: this.rng.chance(0.5) });
+  }
+
   // ------------------------------------------------------------------------------------ portal
   private buildPortal(x: number, y: number, z: number, biome: Biome): void {
     this.portalPos.set(x, y + 2.4, z);
@@ -572,7 +618,7 @@ export class WorldGenerator {
   }
 
   private scenery(endZ: number, routeLow: number): void {
-    const n = 26;
+    const n = Math.round(26 * this.builder.quality);
     for (let i = 0; i < n; i++) {
       const side = this.rng.chance(0.5) ? -1 : 1;
       const x = side * this.rng.range(34, 90);
@@ -593,7 +639,7 @@ export class WorldGenerator {
       }
     }
     // clouds stay out of the route corridor: either far to the side, or well below the lowest surface
-    for (let i = 0; i < 18; i++) {
+    for (let i = 0; i < Math.round(18 * this.builder.quality); i++) {
       const c = this.assets.spawn(this.rng.pick(['cloud_1', 'cloud_2', 'cloud_3'] as const));
       const s = this.rng.range(6, 14);
       const aside = this.rng.chance(0.6);

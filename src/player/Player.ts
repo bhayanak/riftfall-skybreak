@@ -46,6 +46,18 @@ export class Player {
     for (const r of this.model.findComponents('render') as pc.RenderComponent[]) r.enabled = v;
   }
 
+  /** Recolour the runner suit (materials split by bone at build time: MI_Suit / MI_Suit_Accent). */
+  setSuit(suit: pc.Color, accent: pc.Color): void {
+    for (const r of this.model.findComponents('render') as pc.RenderComponent[]) {
+      for (const mi of r.meshInstances) {
+        const m = mi.material as pc.StandardMaterial;
+        if (!m?.name) continue;
+        if (m.name.startsWith('MI_Suit_Accent')) { m.diffuse = accent; m.update(); }
+        else if (m.name.startsWith('MI_Suit')) { m.diffuse = suit; m.update(); }
+      }
+    }
+  }
+
   update(dt: number, input: Input, camYaw: number): void {
     const m = this.movement;
     m.update(dt, input, camYaw);
