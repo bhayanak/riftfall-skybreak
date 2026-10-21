@@ -1,6 +1,7 @@
 import type { Upgrade } from '../progression/Upgrade';
-import type { ShopItem, ItemKind } from '../progression/Shop';
+import { maxLevel, nextPrice, type MarketItem, type ItemKind } from '../progression/Market';
 import type { SaveData } from '../progression/Save';
+import type { MissionView } from '../progression/Missions';
 import { fmtTime } from './Hud';
 
 export type StartChoice = 'play' | 'daily' | 'shop' | 'stats' | 'howto';
@@ -34,13 +35,15 @@ export interface RunSummary {
   record: string;
 }
 
-/** What the shop UI needs from the game to render and act. */
+/** What the market UI needs from the game to render and act. */
 export interface ShopController {
-  items: ShopItem[];
+  items: MarketItem[];
   coins(): number;
-  status(item: ShopItem): 'buy' | 'owned' | 'equipped';
+  /** powers: current level (0 = not owned) */
+  level(item: MarketItem): number;
+  status(item: MarketItem): 'buy' | 'owned' | 'equipped' | 'max';
   /** buy or equip; returns a short message for the footer */
-  act(item: ShopItem): string;
+  act(item: MarketItem): string;
 }
 
 /** DOM overlays: loading, start screen, shop, upgrade choice, run over. */
@@ -68,13 +71,13 @@ export class Overlays {
   hide(): void { this.root.hidden = true; this.root.classList.remove('light'); this.resolver = null; }
 
   /** Title screen. Resolves with the player's choice. */
-  startScreen(o: { coins: number; best: string; daily: boolean; touch: boolean }): Promise<StartChoice> {
+  startScreen(o: { coins: number; best: string; daily: boolean; touch: boolean; total: number; missions: MissionView[] }): Promise<StartChoice> {
     this.show('RIFTFALL', 'SKYBREAK', `◎ ${o.coins.toLocaleString()} COINS · ${o.best}`, true);
     this.cards.innerHTML = '';
     const defs: { key: string; icon: string; name: string; desc: string; choice: StartChoice; cls: string }[] = [
-      { key: o.touch ? '' : 'SPACE', icon: '▶', name: 'RUN', desc: o.daily ? 'Daily route — same for everyone today' : 'Escape the Rift — 9 stages', choice: 'play', cls: ' primary' },
+      { key: o.touch ? '' : 'SPACE', icon: '▶', name: 'RUN', desc: o.daily ? 'Daily route — same for everyone today' : `Escape the Rift — ${o.total} stages`, choice: 'play', cls: ' primary' },
       { key: o.touch ? '' : '2', icon: '☀', name: o.daily ? 'DAILY: ON' : 'DAILY: OFF', desc: 'Toggle the daily route', choice: 'daily', cls: '' },
-      { key: o.touch ? '' : '3', icon: '◈', name: 'WARDROBE', desc: 'Suits, trails and powers', choice: 'shop', cls: '' },
+      { key: o.touch ? '' : '3', icon: '◈', name: 'MARKET', desc: 'Suits, hair, gear, trails, powers', choice: 'shop', cls: '' },
       { key: o.touch ? '' : '4', icon: '≡', name: 'STATS', desc: 'Records and totals', choice: 'stats', cls: ' minor' },
       { key: o.touch ? '' : 'H', icon: '?', name: 'HOW TO PLAY', desc: 'Controls', choice: 'howto', cls: ' minor' },
     ];
@@ -87,6 +90,7 @@ export class Overlays {
       el.addEventListener('pointerenter', () => this.setHover(i));
       this.cards.appendChild(el);
     });
+    if (o.missions.length) this.cards.appendChild(missionPanel(o.missions));
     this.setHover(0);
     this.primaryIndex = 0; this.escapeIndex = null;
     return new Promise<number>((res) => { this.resolver = res; }).then((i) => choices[i]);
@@ -113,50 +117,54 @@ export class Overlays {
     return new Promise<number>((res) => { this.resolver = res; }).then((i) => defs[i][3]);
   }
 
-  /** Lifetime records and the per-stage table. */
-  stats(d: SaveData, total: number, stageName: (i: number) => string): Promise<void> {
-    this.show('STATS', `${d.runs} RUN${d.runs === 1 ? '' : 'S'} · ${d.wins} ESCAPE${d.wins === 1 ? '' : 'S'}`, 'RECORDS ARE KEPT PER STAGE, PER RUN AND FOR LIFE', true);
+  /** Lifetime records, the per-stage table and the mission board. */
+  stats(d: SaveData, total: number, stageName: (i: number) => string, missions: MissionView[], missionsDone: number): Promise<void> {
+    this.show('STATS', `${d.runs} RUN${d.runs === 1 ? '' : 'S'} · ${d.wins} ESCAPE${d.wins === 1 ? '' : 'S'} · ${missionsDone} MISSIONS DONE`, 'RECORDS ARE KEPT PER STAGE, PER RUN AND FOR LIFE', true);
     this.cards.innerHTML = '';
     const grid = document.createElement('div');
     grid.className = 'stats-grid';
+    const stars = Object.values(d.stages).filter((s) => s.star).length;
     const cells: [string, string][] = [
-      [`◎ ${d.coins.toLocaleString()}`, 'COINS'], [`${d.bestStage} / ${total}`, 'MOST STAGES'], [`${d.bestDistance.toLocaleString()} m`, 'BEST DISTANCE'],
-      [`◎ ${d.bestEnergy.toLocaleString()}`, 'BEST RUN COINS'], [d.bestRunTime ? fmtTime(d.bestRunTime) : '—', 'FASTEST ESCAPE'], [fmtLong(d.totalTime), 'TIME PLAYED'],
-      [`${d.totalDistance.toLocaleString()} m`, 'TOTAL DISTANCE'], [`◎ ${d.totalCoins.toLocaleString()}`, 'COINS EARNED'],
+      [`◎ ${d.coins.toLocaleString()}`, 'COINS'], [`${d.bestStage} / ${total}`, 'MOST STAGES'], [`★ ${stars} / ${total}`, 'STARS FOUND'],
+      [`${d.bestDistance.toLocaleString()} m`, 'BEST DISTANCE'], [`◎ ${d.bestEnergy.toLocaleString()}`, 'BEST RUN COINS'], [d.bestRunTime ? fmtTime(d.bestRunTime) : '—', 'FASTEST ESCAPE'],
+      [fmtLong(d.totalTime), 'TIME PLAYED'], [`${d.totalDistance.toLocaleString()} m`, 'TOTAL DISTANCE'], [`◎ ${d.totalCoins.toLocaleString()}`, 'COINS EARNED'],
+      [d.dailyBest ? `${d.dailyBest.stages} / ${total}` : '—', `DAILY BEST${d.dailyBest ? ' · ' + d.dailyBest.date.slice(5) : ''}`],
     ];
     grid.innerHTML = cells.map(([v, l]) => `<div><b>${v}</b><span>${l}</span></div>`).join('');
     this.cards.appendChild(grid);
     const table = document.createElement('table');
     table.className = 'stage-table';
-    let rows = '<tr><th>#</th><th>STAGE</th><th>BEST TIME</th><th>MOST COINS</th><th>CLEARS</th></tr>';
+    let rows = '<tr><th>#</th><th>STAGE</th><th>BEST TIME</th><th>MOST COINS</th><th>CLEARS</th><th>★</th></tr>';
     for (let i = 0; i < total; i++) {
       const r = d.stages[String(i)];
       const locked = i > d.bestStage;
-      rows += `<tr class="${r ? 'done' : locked ? 'locked' : ''}"><td>${r ? '✓' : i + 1}</td><td>${stageName(i)}${i === 3 ? ' · TITAN' : ''}</td><td>${r ? fmtTime(r.bestTime) : '—'}</td><td>${r ? '◎ ' + r.bestCoins.toLocaleString() : '—'}</td><td>${r ? r.clears : locked ? 'LOCKED' : '—'}</td></tr>`;
+      const cleared = !!r && r.clears > 0;
+      rows += `<tr class="${cleared ? 'done' : locked ? 'locked' : ''}"><td>${cleared ? '✓' : i + 1}</td><td>${stageName(i)}${i === 3 ? ' · TITAN' : ''}</td><td>${cleared ? fmtTime(r.bestTime) : '—'}</td><td>${cleared ? '◎ ' + r.bestCoins.toLocaleString() : '—'}</td><td>${cleared ? r.clears : locked ? 'LOCKED' : '—'}</td><td>${r?.star ? '★' : '·'}</td></tr>`;
     }
     table.innerHTML = rows;
     this.cards.appendChild(table);
+    if (missions.length) this.cards.appendChild(missionPanel(missions));
     const back = document.createElement('button');
     back.className = 'card single minor';
     back.innerHTML = `<span class="icon">←</span><span class="name">BACK</span>`;
-    back.addEventListener('click', () => this.pick(2));
+    back.addEventListener('click', () => this.pick(this.cards.children.length - 1));
     this.cards.appendChild(back);
-    this.primaryIndex = 2; this.escapeIndex = 2;
+    this.primaryIndex = this.cards.children.length - 1; this.escapeIndex = this.primaryIndex;
     return new Promise<number>((res) => { this.resolver = res; }).then(() => undefined);
   }
 
-  /** Wardrobe + powers. Re-renders itself after every action; resolves when the player leaves. */
+  /** The Market. Re-renders itself after every action; resolves when the player leaves. */
   shop(ctl: ShopController, touch: boolean): Promise<void> {
     let tab: ItemKind = 'suit';
     let msg = touch ? 'TAP AN ITEM TO BUY OR WEAR IT' : 'CLICK AN ITEM TO BUY OR WEAR IT · ESC TO GO BACK';
     const render = () => {
-      this.show('WARDROBE', `◎ ${ctl.coins().toLocaleString()} COINS`, msg, true);
+      this.show('MARKET', `◎ ${ctl.coins().toLocaleString()} COINS`, msg, true);
       this.cards.innerHTML = '';
       const wrap = document.createElement('div');
       wrap.className = 'shop';
       const tabs = document.createElement('div');
       tabs.className = 'tabs';
-      for (const [k, label] of [['suit', 'SUITS'], ['trail', 'TRAILS'], ['power', 'POWERS']] as [ItemKind, string][]) {
+      for (const [k, label] of [['suit', 'SUITS'], ['hair', 'HAIR'], ['gear', 'GEAR'], ['trail', 'TRAILS'], ['power', 'POWERS']] as [ItemKind, string][]) {
         const b = document.createElement('button');
         b.className = 'tab' + (k === tab ? ' on' : '');
         b.textContent = label;
@@ -170,12 +178,24 @@ export class Overlays {
         const st = ctl.status(it);
         const el = document.createElement('button');
         el.className = `item ${st}`;
-        const sw = it.suit
-          ? `<span class="swatch" style="background: linear-gradient(135deg, ${css(it.suit.suit)} 0 55%, ${css(it.suit.accent)} 55% 100%)"></span>`
-          : it.kind === 'trail'
-            ? `<span class="swatch trail" style="background: ${it.trail ? css(it.trail) : 'linear-gradient(135deg, #5ad1ff, #ff7a3c, #c05aff)'}"></span>`
-            : `<span class="icon">${it.icon ?? '✦'}</span>`;
-        const tag = st === 'equipped' ? 'WEARING' : st === 'owned' ? (it.kind === 'power' ? 'ACTIVE' : 'OWNED · WEAR') : `◎ ${it.price.toLocaleString()}`;
+        let sw: string;
+        if (it.suit) {
+          const s = it.suit;
+          sw = `<span class="swatch suit"><i style="background:${css(s.torso)}"></i><i style="background:${css(s.sleeves)}"></i><i style="background:${css(s.gloves)}"></i><i style="background:${css(s.pants)}"></i><i style="background:${css(s.boots)}"></i></span>`;
+        } else if (it.kind === 'trail') {
+          const bg = it.trail === 'rainbow' ? 'linear-gradient(90deg, #ff5a5a, #ffd05a, #5aff8a, #5ad1ff, #c05aff)' : it.trail ? css(it.trail) : 'linear-gradient(135deg, #5ad1ff, #ff7a3c, #c05aff)';
+          sw = `<span class="swatch trail" style="background: ${bg}"></span>`;
+        } else if (it.kind === 'gear' && it.gear && it.gear.style !== 'none') {
+          sw = `<span class="swatch" style="background:${css(it.gear.color)}"></span>`;
+        } else if (it.kind === 'hair') {
+          sw = `<span class="icon">${it.hair ? '❧' : '○'}</span>`;
+        } else sw = `<span class="icon">${it.icon ?? '✦'}</span>`;
+        let tag: string;
+        if (it.kind === 'power') {
+          const lv = ctl.level(it), mx = maxLevel(it), price = nextPrice(it, lv);
+          const dots = Array.from({ length: mx }, (_, i) => (i < lv ? '●' : '○')).join(' ');
+          tag = `<span class="lv">${dots}</span>${price === null ? 'MAX' : `◎ ${price.toLocaleString()}${lv ? ' · UPGRADE' : ''}`}`;
+        } else tag = st === 'equipped' ? 'WEARING' : st === 'owned' ? 'OWNED · WEAR' : it.price === 0 ? 'FREE' : `◎ ${it.price.toLocaleString()}`;
         el.innerHTML = `${sw}<span class="name">${it.name}</span><span class="desc">${it.desc}</span><span class="price">${tag}</span>`;
         el.addEventListener('click', () => { msg = ctl.act(it); render(); });
         grid.appendChild(el);
@@ -220,8 +240,8 @@ export class Overlays {
   }
 
   /** Campaign complete. */
-  victory(o: { time: number; coins: number; bonus: number; distance: number; fastest: boolean; bestLine: string }): Promise<VictoryChoice> {
-    this.show('YOU ESCAPED THE RIFT', o.fastest ? 'FASTEST ESCAPE YET' : 'ALL 9 STAGES CLEARED', o.bestLine);
+  victory(o: { time: number; coins: number; bonus: number; distance: number; fastest: boolean; bestLine: string; total: number }): Promise<VictoryChoice> {
+    this.show('YOU ESCAPED THE RIFT', o.fastest ? 'FASTEST ESCAPE YET' : `ALL ${o.total} STAGES CLEARED`, o.bestLine);
     this.cards.innerHTML = '';
     const stats = document.createElement('div');
     stats.className = 'runstats';
@@ -250,13 +270,15 @@ export class Overlays {
       ? [['◉', 'MOVE', 'Thumb anywhere on the lower-left. A short push is a full sprint. Drag right side to look.'], ['JUMP', 'JUMP ×2', 'Hold for a full jump. Tap again in the air for a second jump.'],
          ['LEDGE', 'GRAB', 'Land short? You grab the ledge and pull up. Glowing islands give way — keep moving.'],
          ['DASH', 'AIR DASH', 'Tap mid-jump to cross big gaps.'], ['GRAPPLE', 'GRAPPLE', 'When a ring glows gold, tap to swing. Tap again to let go.'],
-         ['WALL', 'WALL-RUN', 'Jump towards a wall while moving. Jump again to leap off.'], ['SLIDE', 'SLIDE', 'Slide while sprinting for a burst of speed.'],
-         ['▲', 'THE RIFT', 'It chases you. 9 stages to escape. Coins bank at every portal.'], ['❚❚', 'PAUSE', 'Top-right button: pause, controls, quit to title.']]
+         ['WALL', 'WALL-RUN', 'Jump towards a wall while moving. Jump again to leap off.'], ['SLIDE', 'SLIDE', 'Duck under low gates and keep your speed.'],
+         ['★', 'STARS', 'One hidden star per stage, off the obvious line.'],
+         ['▲', 'THE RIFT', 'It chases you. 12 stages to escape. Coins bank at every portal.'], ['❚❚', 'PAUSE', 'Top-right button: pause, controls, quit to title.']]
       : [['WASD', 'MOVE', 'Mouse to look (click once to capture).'], ['SPACE', 'JUMP ×2', 'Hold for a full jump. Press again in the air for a second jump.'],
          ['LEDGE', 'GRAB', 'Land short? You grab the ledge and pull up. Glowing islands give way — keep moving.'],
          ['SHIFT', 'AIR DASH', 'Press mid-jump to cross big gaps.'], ['E', 'GRAPPLE', 'When a ring glows gold, press E to swing. E again to let go.'],
-         ['SPACE', 'WALL-RUN', 'Jump towards a wall while moving. Space again to leap off.'], ['C', 'SLIDE', 'Slide while sprinting for a burst of speed.'],
-         ['▲', 'THE RIFT', 'It chases you. 9 stages to escape. Coins bank at every portal.'], ['ESC', 'PAUSE', 'Pause, controls, quit to title. M sound · R restart.']];
+         ['SPACE', 'WALL-RUN', 'Jump towards a wall while moving. Space again to leap off.'], ['C', 'SLIDE', 'Duck under low gates and keep your speed. Works from a standstill at a gate.'],
+         ['★', 'STARS', 'One hidden star per stage, off the obvious line. Missions pay coins for them.'],
+         ['▲', 'THE RIFT', 'It chases you. 12 stages to escape. Coins bank at every portal.'], ['ESC', 'PAUSE', 'Pause, controls, quit to title. M sound · R restart.']];
     const list = document.createElement('div');
     list.className = 'howto';
     for (const [key, name, text] of rows) {
@@ -334,6 +356,18 @@ function fmtLong(seconds: number): string {
   const s = Math.round(seconds);
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
   return h ? `${h}h ${m}m` : `${m}m ${r < 10 ? '0' : ''}${r}s`;
+}
+
+/** Three active missions with progress bars and rewards. */
+function missionPanel(ms: MissionView[]): HTMLElement {
+  const p = document.createElement('div');
+  p.className = 'missions';
+  p.innerHTML = `<h3>MISSIONS</h3>` + ms.map((v) => {
+    const pct = Math.round((v.progress / v.m.target) * 100);
+    const prog = v.m.target > 1 ? `${v.progress.toLocaleString()} / ${v.m.target.toLocaleString()}` : v.progress >= 1 ? 'DONE' : '';
+    return `<div class="mission"><span class="mtext">${v.m.text}</span><span class="mreward">+◎ ${v.m.reward}</span><span class="mprog">${prog}</span><i style="width:${pct}%"></i></div>`;
+  }).join('');
+  return p;
 }
 
 function css(c: { r: number; g: number; b: number }): string {

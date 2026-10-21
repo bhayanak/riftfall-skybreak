@@ -65,16 +65,20 @@ export interface RunStats {
   riftShield: number;
   /** multiplier on Rift speed (< 1 = slower Rift) */
   riftSlow: number;
+  /** coins lost on a fall */
+  fallPenalty: number;
+  /** chance a picked-up coin counts double */
+  luck: number;
 }
 export const defaultStats = (): RunStats => ({
   airJumps: 1, dashCharges: 1, grappleRange: TUNING.grappleRange, speedMult: 1, wallRunTime: TUNING.wallRunTime,
   coyoteBonus: 0, jumpMult: 1, grappleBoost: 1, dashResetOnTrick: false, magnetRadius: 1.8, flowDecayMult: 1, riftShield: 0,
-  riftSlow: 1,
+  riftSlow: 1, fallPenalty: 5, luck: 0,
 });
 
 export type MoveEvent =
   | 'jump' | 'djump' | 'dash' | 'land' | 'land-hard' | 'fell' | 'respawn'
-  | 'wallrun' | 'wallrun-end' | 'walljump' | 'slide' | 'slide-end' | 'vault'
+  | 'wallrun' | 'wallrun-end' | 'walljump' | 'slide' | 'slide-end' | 'vault' | 'gate'
   | 'grapple' | 'grapple-release';
 
 const _wish = new pc.Vec3();
@@ -119,8 +123,26 @@ export class Movement {
   private contacts: Contact[] = [];
   private jumpHeld = false;
   private airTime = 0;
+  private underGate = false;
 
   constructor(private world: CollisionWorld) {}
+
+  /** A gate (slide-under barrier) within 1.6 m in the facing direction at chest height. */
+  private gateAhead(): boolean {
+    _tmp.set(this.position.x, this.position.y + 1.3, this.position.z);
+    const hit = this.world.raycast(_tmp, this.facing, 1.6);
+    return !!hit && hit.box.tag === 'gate';
+  }
+
+  /** Something solid less than standing height above the feet (we are under a gate). */
+  private ceilingAbove(): boolean {
+    _tmp.set(this.position.x, this.position.y + 0.5, this.position.z);
+    const hit = this.world.raycast(_tmp, pc.Vec3.UP, TUNING.height - 0.4);
+    const under = !!hit && hit.box.tag === 'gate';
+    if (this.underGate && !under) this.events.push('gate');   // came out the other side
+    this.underGate = under;
+    return !!hit;
+  }
 
   get height(): number { return this.state === 'slide' ? TUNING.slideHeight : TUNING.height; }
   get speedXZ(): number { return Math.hypot(this.velocity.x, this.velocity.z); }
@@ -180,12 +202,19 @@ export class Movement {
       this.events.push('dash');
     }
 
-    // --- slide start --------------------------------------------------------------------------
-    if (input.wasPressed('slide') && this.grounded && this.state === 'ground' && this.speedXZ > T.slideMinSpeed) {
-      this.state = 'slide';
-      this.slideTimer = T.slideTime;
-      this.velocity.x *= T.slideBoost; this.velocity.z *= T.slideBoost;
-      this.events.push('slide');
+    // --- slide start: sprinting, or stopped against a gate (you bonked it; slide gets you under) -------------
+    if (input.wasPressed('slide') && this.grounded && this.state === 'ground') {
+      const gate = this.gateAhead();
+      if (this.speedXZ > T.slideMinSpeed || gate) {
+        this.state = 'slide';
+        this.slideTimer = T.slideTime;
+        if (gate && this.speedXZ < T.slideMinSpeed) {
+          const d = wishLen > 0.001 ? _wish : this.facing;
+          this.velocity.x = d.x * 7.5; this.velocity.z = d.z * 7.5;
+        }
+        this.velocity.x *= T.slideBoost; this.velocity.z *= T.slideBoost;
+        this.events.push('slide');
+      }
     }
 
     // --- state integration --------------------------------------------------------------------
@@ -267,10 +296,15 @@ export class Movement {
         const cur = this.speedXZ;
         if (cur > 0) { const k = Math.max(0, cur - 4 * dt) / cur; this.velocity.x *= k; this.velocity.z *= k; }
         this.velocity.y = Math.max(-T.maxFall, this.velocity.y - T.gravity * dt);
-        if (this.jumpBuf > 0 && (this.grounded || this.coyote > 0)) {
+        const lowCeiling = this.ceilingAbove();
+        if (this.jumpBuf > 0 && (this.grounded || this.coyote > 0) && !lowCeiling) {
           this.doJump(T.jumpVelocity * S.jumpMult, 'jump');
           this.state = 'air';
           this.events.push('slide-end');
+        } else if (lowCeiling) {
+          // under a gate: stay down and keep moving until we are through
+          this.slideTimer = Math.max(this.slideTimer, 0.1);
+          if (cur < 5) { const d = this.facing; this.velocity.x = d.x * 6; this.velocity.z = d.z * 6; }
         } else if (this.slideTimer <= 0 || cur < 2.5 || !this.grounded) {
           this.state = this.grounded ? 'ground' : 'air';
           this.events.push('slide-end');

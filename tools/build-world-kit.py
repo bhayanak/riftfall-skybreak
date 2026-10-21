@@ -156,18 +156,24 @@ if WHAT & {"player", "all"}:
     bpy.ops.import_scene.gltf(filepath=os.path.join(UBC, "Superhero_Male_FullBody.gltf"))
     arm = next(o for o in bpy.data.objects if o.type == "ARMATURE")
     arm.name = "Universal"
-    # hair: rigged to head bone, same skeleton -> parent to our armature and reuse its modifier target
-    before = set(bpy.data.objects)
-    bpy.ops.import_scene.gltf(filepath=os.path.join(HAIR, "Hair_SimpleParted.gltf"))
-    new = [o for o in bpy.data.objects if o not in before]
-    hair_arm = next((o for o in new if o.type == "ARMATURE"), None)
-    for o in new:
-        if o.type == "MESH":
-            o.parent = arm
-            for m in o.modifiers:
-                if m.type == "ARMATURE": m.object = arm
-    if hair_arm:
-        bpy.data.objects.remove(hair_arm, do_unlink=True)
+    # every hairstyle (rigged to the same head bone) rides along as its own named mesh; the game toggles them
+    # (glob.escape: the pack lives under "...[Standard]", which glob would read as a character class)
+    for hf in sorted(glob.glob(os.path.join(glob.escape(HAIR), "*.gltf"))):
+        stem = os.path.splitext(os.path.basename(hf))[0]
+        before = set(bpy.data.objects)
+        bpy.ops.import_scene.gltf(filepath=hf)
+        new = [o for o in bpy.data.objects if o not in before]
+        hair_arm = next((o for o in new if o.type == "ARMATURE"), None)
+        k = 0
+        for o in new:
+            if o.type == "MESH":
+                o.name = stem if k == 0 else f"{stem}_{k}"; k += 1
+                o.parent = arm
+                for m in o.modifiers:
+                    if m.type == "ARMATURE": m.object = arm
+        if hair_arm:
+            bpy.data.objects.remove(hair_arm, do_unlink=True)
+        log(f"  hair {stem}: {k} mesh(es)")
     fix_images(UBC)
     resize_images(1024)
     for o in bpy.data.objects:
@@ -175,9 +181,10 @@ if WHAT & {"player", "all"}:
             for ms in o.material_slots:
                 if ms.material: ms.material.blend_method = "OPAQUE"
 
-    # Runner suit: the base character is a bare mannequin. Split the body polygons by dominant bone into
-    # skin (head/neck) / suit (torso, legs) / accent (gloves, forearms, boots) and give each its own material
-    # (same normal + roughness maps, different base colour). Exports as 3 primitives of one skinned mesh.
+    # Runner outfit: the base character is a bare mannequin. Split the body polygons by dominant bone into six
+    # zones -- skin (head/neck), torso, sleeves (upper arms), gloves (forearms/hands), pants (pelvis/thighs),
+    # boots (calves/feet) -- each with its own material (same normal + roughness maps, different base colour),
+    # so a "suit" in the game is five colours and reads as clothing rather than body paint.
     body = next(o for o in bpy.data.objects if o.type == "MESH"
                 and any(ms.material and "Superhero" in ms.material.name for ms in o.material_slots))
     me = body.data
@@ -185,10 +192,14 @@ if WHAT & {"player", "all"}:
     skin_mat = body.material_slots[skin_slot].material
     gname = {g.index: g.name for g in body.vertex_groups}
 
+    ZONES = ["MI_Skin", "MI_Suit_Torso", "MI_Suit_Sleeves", "MI_Suit_Gloves", "MI_Suit_Pants", "MI_Suit_Boots"]
     def bone_class(n):
         l = n.lower()
         if l in ("head", "neck_01") or l.startswith(("face", "eye", "jaw")): return 0
-        if any(k in l for k in ("hand", "index", "middle", "ring", "pinky", "thumb", "lowerarm", "foot", "ball")): return 2
+        if any(k in l for k in ("hand", "index", "middle", "ring", "pinky", "thumb", "lowerarm")): return 3
+        if "upperarm" in l: return 2
+        if any(k in l for k in ("calf", "foot", "ball")): return 5
+        if any(k in l for k in ("pelvis", "thigh")): return 4
         return 1
 
     vclass = []
@@ -208,19 +219,18 @@ if WHAT & {"player", "all"}:
         bsdf.inputs["Roughness"].default_value = rough
         return m
 
-    suit = flat_variant("MI_Suit", (0.055, 0.075, 0.16), 0.55)       # deep navy
-    accent = flat_variant("MI_Suit_Accent", (0.10, 0.62, 0.66), 0.35)  # teal, matches UI / rift
-    me.materials.append(suit); suit_slot = len(me.materials) - 1
-    me.materials.append(accent); accent_slot = len(me.materials) - 1
-    slot_for = {0: skin_slot, 1: suit_slot, 2: accent_slot}
-    counts = [0, 0, 0]
+    defaults = [None, (0.055, 0.075, 0.16), (0.07, 0.10, 0.20), (0.10, 0.62, 0.66), (0.04, 0.05, 0.11), (0.08, 0.45, 0.50)]
+    slot_for = {0: skin_slot}
+    for z in range(1, 6):
+        me.materials.append(flat_variant(ZONES[z], defaults[z], 0.55)); slot_for[z] = len(me.materials) - 1
+    counts = [0] * 6
     for p in me.polygons:
         if p.material_index != skin_slot: continue
-        votes = [0, 0, 0]
+        votes = [0] * 6
         for vi in p.vertices: votes[vclass[vi]] += 1
-        c = max(range(3), key=lambda i: votes[i])
+        c = max(range(6), key=lambda i: votes[i])
         p.material_index = slot_for[c]; counts[c] += 1
-    log(f"suit split: skin {counts[0]}  suit {counts[1]}  accent {counts[2]} polys")
+    log("suit split: " + "  ".join(f"{ZONES[i][3:]} {counts[i]}" for i in range(6)))
 
     export_glb(os.path.join(OUT, "player", "superhero_male.glb"),
                export_animations=False, export_skins=True, export_def_bones=False,

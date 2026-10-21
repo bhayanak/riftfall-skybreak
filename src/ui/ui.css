@@ -102,6 +102,23 @@ canvas#game { position: fixed; inset: 0; width: 100%; height: 100%; display: blo
 .item.equipped .price { color: var(--accent); }
 .item .swatch { width: 46px; height: 46px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.35); }
 .item .swatch.trail { border-radius: 10px; width: 56px; height: 22px; }
+.item .swatch.suit { display: flex; overflow: hidden; border-radius: 10px; width: 60px; height: 40px; }
+.item .swatch.suit i { flex: 1; display: block; }
+.item .lv { display: block; letter-spacing: 0.3em; color: var(--accent); font-size: 10px; margin-bottom: 3px; }
+.item.max .price { color: #9fe7c4; }
+.missions { flex-basis: 100%; max-width: 560px; margin: 6px auto 10px; text-align: left; }
+.missions h3 { margin: 0 0 6px; font-size: 10px; letter-spacing: 0.3em; color: var(--hud-dim); font-weight: 700; text-align: center; }
+.mission { position: relative; display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; padding: 7px 10px 9px; margin-bottom: 5px; border-radius: 8px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); font-size: clamp(11px, 1.7vmin, 13px); overflow: hidden; }
+.mission .mreward { color: #ffe9b0; font-weight: 700; font-size: 11px; letter-spacing: 0.1em; }
+.mission .mprog { color: var(--hud-dim); font-size: 10px; letter-spacing: 0.12em; font-variant-numeric: tabular-nums; min-width: 54px; text-align: right; }
+.mission i { position: absolute; left: 0; bottom: 0; height: 3px; background: linear-gradient(90deg, var(--accent), #b388ff); }
+#toast {
+  position: fixed; left: 50%; top: 22%; transform: translate(-50%, 0); padding: 10px 18px; border-radius: 10px; z-index: 5;
+  background: rgba(10, 14, 30, 0.7); border: 1px solid rgba(255, 220, 140, 0.7); color: #ffe9b0; font-weight: 800; letter-spacing: 0.16em;
+  font-size: clamp(12px, 2vmin, 15px); pointer-events: none; text-align: center; opacity: 0; transition: opacity 250ms, transform 250ms;
+}
+#toast.on { opacity: 1; transform: translate(-50%, -8px); }
+#toast small { display: block; font-weight: 600; font-size: 0.8em; color: var(--hud-dim); letter-spacing: 0.12em; margin-top: 3px; }
 .item .icon { font-size: 30px; color: var(--accent); line-height: 46px; }
 .item .name { font-weight: 800; letter-spacing: 0.12em; font-size: 12px; }
 .item .desc { font-size: 11px; color: var(--hud-dim); line-height: 1.3; min-height: 28px; }

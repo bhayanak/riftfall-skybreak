@@ -26,6 +26,8 @@ export class Titan {
   private pos = new pc.Vec3();
   private look = new pc.Vec3();
   private clip = '';
+  /** seconds between slams (plus up to 2 s jitter); shorter on later stages */
+  private cadence = 8;
 
   constructor(app: pc.AppBase, assets: Assets) {
     this.model = assets.spawn('titan');
@@ -67,9 +69,10 @@ export class Titan {
     this.light.light!.color = c;
   }
 
-  start(spawn: pc.Vec3): void {
+  start(spawn: pc.Vec3, cadence = 8): void {
     this.active = true;
     this.entity.enabled = true;
+    this.cadence = cadence;
     this.cooldown = 6;
     this.target = null;
     this.ring.enabled = false;
@@ -109,7 +112,7 @@ export class Titan {
         this.onSlam?.(this.target);
         this.target = null;
         this.ring.enabled = false;
-        this.cooldown = 7 + Math.random() * 4;
+        this.cooldown = this.cadence + Math.random() * 2;
         this.play('Flying_Idle');
       }
     } else {

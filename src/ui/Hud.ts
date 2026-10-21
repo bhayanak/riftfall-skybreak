@@ -30,6 +30,15 @@ export class Hud {
     if (t !== this.lastTimer) { this.timer.textContent = t; this.lastTimer = t; }
   }
 
+  private toast = document.getElementById('toast')!;
+  private toastTimer = 0;
+  /** Centre-screen award banner (missions, stars, records). */
+  showToast(title: string, sub = '', seconds = 2.6): void {
+    this.toast.innerHTML = `${title}${sub ? `<small>${sub}</small>` : ''}`;
+    this.toast.classList.add('on');
+    this.toastTimer = seconds;
+  }
+
   /** Hide the whole HUD (title screen). */
   setVisible(v: boolean): void {
     const hud = document.getElementById('hud');
@@ -68,6 +77,10 @@ export class Hud {
     if (this.hintTimer > 0) {
       this.hintTimer -= dt;
       if (this.hintTimer <= 0) this.hint.style.opacity = '0.55';
+    }
+    if (this.toastTimer > 0) {
+      this.toastTimer -= dt;
+      if (this.toastTimer <= 0) this.toast.classList.remove('on');
     }
   }
 

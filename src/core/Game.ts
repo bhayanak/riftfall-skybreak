@@ -17,7 +17,8 @@ import { UpgradeDeck } from '../progression/Upgrade';
 import { Sfx } from '../audio/Sfx';
 import { Music } from '../audio/Music';
 import { Save } from '../progression/Save';
-import { SHOP, byId, type ShopItem } from '../progression/Shop';
+import { MARKET, byId, maxLevel, nextPrice, type MarketItem } from '../progression/Market';
+import { Missions } from '../progression/Missions';
 import { Platform } from '../platform/Platform';
 import { Hud } from '../ui/Hud';
 import { TouchControls } from '../ui/TouchControls';
@@ -27,9 +28,10 @@ type Phase = 'loading' | 'menu' | 'playing' | 'portal' | 'upgrade' | 'dead';
 const BIOME_ORDER: BiomeId[] = ['sky', 'fire', 'void'];
 /** Stage at which the Rift Titan starts stalking the route. */
 const TITAN_STAGE = 3;
-/** A run is an escape across this many stages (3 loops of the 3 biomes); after that the player may keep running. */
-const CAMPAIGN_STAGES = 9;
-const ESCAPE_BONUS = 500;
+/** A run is an escape across this many stages (4 loops of the 3 biomes); after that the player may keep running. */
+const CAMPAIGN_STAGES = 12;
+const ESCAPE_BONUS = 150;
+const STAR_COINS = 10;
 
 /** Same route for everyone on a given UTC day. */
 function dailySeed(): number {
@@ -51,6 +53,7 @@ function pickSeed(): { seed: number; daily: boolean } {
 
 /** Movement never reads from this: used to keep the player idle behind the title screen. */
 const NO_INPUT = { move: { x: 0, y: 0 }, wasPressed: () => false, wasReleased: () => false, isHeld: () => false } as unknown as Input;
+const todayKey = (): string => new Date().toISOString().slice(0, 10);
 
 export class Game {
   readonly app: pc.AppBase;
@@ -66,6 +69,7 @@ export class Game {
   readonly sfx: Sfx;
   readonly music = new Music();
   readonly save = new Save();
+  readonly missions = new Missions(this.save);
   readonly platform = new Platform();
   player!: Player;
   camera!: CameraRig;
@@ -86,6 +90,9 @@ export class Game {
   private runTotalTime = 0;    // seconds across stages
   private endless = false;     // past the campaign: no more stage records, no second victory
   private recordedAt = { distance: 0, time: 0 };   // what recordRun() already counted (endless extension)
+  private stageFalls = 0;
+  private runStars = 0;
+  private rainbowT = 0;
   private checkpoint = 0;
   private runTime = 0;
   private started = false;     // player has moved; the Rift clock runs from here
@@ -156,14 +163,15 @@ export class Game {
     this.titan.onSlam = (isl) => { this.gen.builder.slam(isl); this.camera.kick(1.2); this.sfx.play('land_hard', 1, 0.6); this.vfx.emit(new pc.Vec3(isl.x, isl.top + 0.5, isl.z), 40, 9, 0.5, 1.2, 1.5, 4); };
     this.vfx = new VFX(this.app, this.device.profile === 'mobile-low' ? 60 : 160);
     this.player = new Player(this.app, this.assets, this.world);
-    this.applySuit();
     this.gen.builder.quality = this.device.profile === 'mobile-low' ? 0.5 : this.device.profile === 'mobile-high' ? 0.75 : 1;
     this.camera = new CameraRig(this.app, this.device.isMobile, this.world);
     this.env.attachPost(this.camera.entity.camera!);
+    this.applyLook();
     if (this.device.isTouch) new TouchControls(this.input);
     this.player.movement.anchorProvider = (pos, fwd, range) => this.gen.findAnchor(pos, fwd, range)?.pos ?? null;
     this.hud.onPause = () => void this.pause();
     this.input.onPointerLockLost = () => void this.pause();
+    this.missions.onComplete = (mi) => { this.hud.showToast(`MISSION COMPLETE · +◎ ${mi.reward}`, mi.text, 3.2); this.sfx.play('flow_up', 1, 1.3); };
 
     this.platform.loadingStop();
     await this.startRun(true, false);
@@ -178,12 +186,12 @@ export class Game {
   }
   private stageName(i: number): string { return BIOMES[BIOME_ORDER[i % BIOME_ORDER.length]].name; }
 
-  /** Title screen loop: play / daily toggle / wardrobe / controls. Returns when a run launches. */
+  /** Title screen loop: play / daily toggle / market / stats / controls. Returns when a run launches. */
   private async menu(): Promise<void> {
     this.phase = 'menu';
     this.hud.setVisible(false);
     for (;;) {
-      const choice = await this.overlays.startScreen({ coins: this.save.data.coins, best: this.bestLine(), daily: this.daily, touch: this.device.isTouch });
+      const choice = await this.overlays.startScreen({ coins: this.save.data.coins, best: this.bestLine(), daily: this.daily, touch: this.device.isTouch, total: CAMPAIGN_STAGES, missions: this.missions.view() });
       this.sfx.play('ui_select', 0.5);
       if (choice === 'play') break;
       if (choice === 'daily') {
@@ -193,7 +201,7 @@ export class Game {
       } else if (choice === 'shop') {
         await this.overlays.shop(this.shopController(), this.device.isTouch);
       } else if (choice === 'stats') {
-        await this.overlays.stats(this.save.data, CAMPAIGN_STAGES, (i) => this.stageName(i));
+        await this.overlays.stats(this.save.data, CAMPAIGN_STAGES, (i) => this.stageName(i), this.missions.view(), this.missions.completedCount);
       } else {
         await this.overlays.howToPlay(this.device.isTouch);
         this.seenHowTo = true;
@@ -201,40 +209,72 @@ export class Game {
     }
     this.sfx.play('ui_confirm', 0.8);
     this.hud.setVisible(true);
+    if (this.daily) { this.save.data.dailies++; this.missions.count('dailies'); }
+    // powers may have been bought in the market since the stage was built
+    this.player.movement.stats = defaultStats();
+    this.applyPowers();
+    this.flow.decayMult = this.player.movement.stats.flowDecayMult;
     this.launch();
   }
 
   private shopController(): ShopController {
+    const worn = (it: MarketItem): boolean =>
+      it.kind === 'suit' ? this.save.data.suit === it.id : it.kind === 'hair' ? this.save.data.hair === it.id
+      : it.kind === 'trail' ? this.save.data.trail === it.id : it.kind === 'gear' && !!it.gear ? this.save.data.gear[it.gear.slot] === it.id : false;
     return {
-      items: SHOP,
+      items: MARKET,
       coins: () => this.save.data.coins,
+      level: (it) => this.save.level(it.id),
       status: (it) => {
+        if (it.kind === 'power') { const lv = this.save.level(it.id); return lv >= maxLevel(it) ? 'max' : lv > 0 ? 'owned' : 'buy'; }
         if (!this.save.owns(it.id)) return 'buy';
-        const worn = it.kind === 'suit' ? this.save.data.suit : it.kind === 'trail' ? this.save.data.trail : null;
-        return worn === null || worn === it.id ? 'equipped' : 'owned';
+        return worn(it) ? 'equipped' : 'owned';
       },
       act: (it) => {
-        if (!this.save.owns(it.id)) {
-          if (!this.save.buy(it.id, it.price)) { this.sfx.play('ui_select', 0.5, 0.6); return `NEED ${(it.price - this.save.data.coins).toLocaleString()} MORE COINS — EARN THEM BY RUNNING`; }
+        const short = (p: number) => { this.sfx.play('ui_select', 0.5, 0.6); return `NEED ${(p - this.save.data.coins).toLocaleString()} MORE COINS — RUN, FIND STARS, FINISH MISSIONS`; };
+        if (it.kind === 'power') {
+          const lv = this.save.level(it.id), price = nextPrice(it, lv);
+          if (price === null) return `${it.name} IS AT MAX LEVEL`;
+          if (!this.save.buy(it.id, price, true)) return short(price);
           this.sfx.play('flow_up', 0.8, 1.1);
-          if (it.kind === 'power') return `${it.name} IS NOW ACTIVE ON EVERY RUN`;
+          return `${it.name} LEVEL ${lv + 1} — ACTIVE ON EVERY RUN`;
+        }
+        if (!this.save.owns(it.id)) {
+          if (!this.save.buy(it.id, it.price)) return short(it.price);
+          this.sfx.play('flow_up', 0.8, 1.1);
         } else this.sfx.play('ui_confirm', 0.6);
-        if (it.kind === 'suit') { this.save.equip('suit', it.id); this.applySuit(); return `WEARING ${it.name}`; }
-        if (it.kind === 'trail') { this.save.equip('trail', it.id); this.applyTrail(this.biome()); return `TRAIL: ${it.name}`; }
-        return `${it.name} IS ACTIVE`;
+        if (it.kind === 'suit') this.save.equip('suit', it.id);
+        else if (it.kind === 'hair') this.save.equip('hair', it.id);
+        else if (it.kind === 'trail') this.save.equip('trail', it.id);
+        else if (it.gear) this.save.equipGear(it.gear.slot, it.id);
+        this.applyLook();
+        return it.kind === 'trail' ? `TRAIL: ${it.name}` : `WEARING ${it.name}`;
       },
     };
   }
 
-  private applySuit(): void {
-    const it = byId(this.save.data.suit) ?? byId('suit.skyrunner')!;
-    if (it.suit) this.player.setSuit(it.suit.suit, it.suit.accent);
+  /** Dress the runner from the profile: suit zones, hair mesh, gear per slot, trail colour. */
+  private applyLook(): void {
+    const s = byId(this.save.data.suit) ?? byId('suit.skyrunner')!;
+    if (s.suit) this.player.setSuit(s.suit);
+    this.player.setHair(byId(this.save.data.hair)?.hair ?? 'Hair_SimpleParted');
+    for (const slot of ['back', 'head', 'face'] as const) {
+      const g = byId(this.save.data.gear[slot])?.gear;
+      this.player.setGear(slot, g?.style ?? 'none', g?.color ?? pc.Color.BLACK);
+    }
+    this.applyTrail(this.biome());
   }
   private applyTrail(b: { rift: pc.Color }): void {
-    const it = byId(this.save.data.trail);
-    this.vfx.setColor(it?.trail ?? b.rift);
+    const t = byId(this.save.data.trail)?.trail;
+    if (t === 'rainbow') return;   // animated in update()
+    this.vfx.setColor(t ?? b.rift);
   }
-  private ownedPowers(): ShopItem[] { return SHOP.filter((i) => i.kind === 'power' && this.save.owns(i.id)); }
+  private applyPowers(): void {
+    for (const it of MARKET) {
+      const lv = this.save.level(it.id);
+      if (it.kind === 'power' && lv > 0) it.apply?.(this.player.movement.stats, lv);
+    }
+  }
 
   // ------------------------------------------------------------------------------------ run flow
   private biome() { return BIOMES[BIOME_ORDER[this.stage % BIOME_ORDER.length]]; }
@@ -247,7 +287,9 @@ export class Game {
       this.stage = 0; this.energy = 0; this.distance = 0; this.distanceBase = 0;
       this.runCoins = 0; this.runTotalTime = 0; this.endless = false; this.recordedAt = { distance: 0, time: 0 };
       this.player.movement.stats = defaultStats();
-      for (const p of this.ownedPowers()) p.apply?.(this.player.movement.stats);
+      this.applyPowers();
+      this.missions.newRun();
+      this.runStars = 0;
       this.deck.reset();
       this.flow.reset();
       // the URL / daily seed is used as-is for the first route; every later route is a fresh one
@@ -257,8 +299,8 @@ export class Game {
     this.overlays.loading(0.9);
     await this.env.setBiome(b.id);
     if (id !== this.runId) return;
-    const difficulty = 0.6 + this.stage * 0.5;
-    this.gen.generate(this.seed + this.stage * 7919, b, difficulty, 10 + Math.min(4, this.stage), this.stage);
+    const difficulty = 0.6 + this.stage * 0.45;
+    this.gen.generate(this.seed + this.stage * 7919, b, difficulty, 11 + Math.min(7, this.stage), this.stage);
     if (import.meta.env.DEV) {
       const bad = this.gen.violations();
       if (bad.length) console.warn('[route] edges harder than intended:', bad);
@@ -267,7 +309,9 @@ export class Game {
     this.rift.setColor(b.rift);
     this.applyTrail(b);
     this.titan.setColor(b.rift);
-    if (this.stage >= TITAN_STAGE) this.titan.start(this.gen.spawn); else this.titan.stop();
+    if (this.stage >= TITAN_STAGE) this.titan.start(this.gen.spawn, Math.max(3.5, 8 - (this.stage - TITAN_STAGE) * 0.5)); else this.titan.stop();
+    this.music.setBiome(b.id);
+    this.stageFalls = 0;
     this.hud.setBiome(`${b.name} · ${this.endless ? `ENDLESS ${this.stage + 1}` : `STAGE ${this.stage + 1} / ${CAMPAIGN_STAGES}`}${this.daily ? ' · DAILY' : ''}`);
     this.hud.setTimer(0);
     this.flow.decayMult = this.player.movement.stats.flowDecayMult;
@@ -317,11 +361,12 @@ export class Game {
     this.rift.reset(Math.max(this.rift.z, cp.spawn.z + 32), this.rift.speed);
     this.gen.restoreAhead(this.rift.z);
     this.riftGrace = 1.5;
-    this.energy = Math.max(0, this.energy - 25);
+    this.energy = Math.max(0, this.energy - this.player.movement.stats.fallPenalty);
+    this.stageFalls++;
     this.flow.reset();
     this.camera.kick(0.8);
     this.sfx.play('death', 0.6, 1.4);
-    this.hud.showHint('FELL · −25 COINS', 1.5);
+    this.hud.showHint(`FELL · −${this.player.movement.stats.fallPenalty} COINS`, 1.5);
   }
 
   /** Pause menu: resume / controls / quit to title (coins earned so far are banked). */
@@ -357,10 +402,11 @@ export class Game {
     this.bankStage();
     let record = '';
     if (!this.endless) {
-      const beat = this.save.recordRun({ distance: this.distance, stages: this.stage, coins: this.runCoins, time: this.runTotalTime, won: false });
+      const beat = this.save.recordRun({ distance: this.distance, stages: this.stage, coins: this.runCoins, time: this.runTotalTime, won: false }, this.daily ? todayKey() : null);
       if (beat.distance || beat.stages) this.platform.happytime();
       const newSuit = beat.unlocked.map((u) => byId(u)?.name).filter(Boolean)[0] ?? '';
-      record = newSuit ? `NEW SUIT UNLOCKED — ${newSuit}` : beat.distance ? 'NEW DISTANCE RECORD' : beat.stages ? 'NEW STAGE RECORD' : beat.coins ? 'MOST COINS IN A RUN' : '';
+      record = newSuit ? `NEW SUIT UNLOCKED — ${newSuit}` : beat.distance ? 'NEW DISTANCE RECORD' : beat.stages ? 'NEW STAGE RECORD' : beat.coins ? 'MOST COINS IN A RUN' : beat.dailyBest ? 'DAILY BEST' : '';
+      if (newSuit) this.applyLook();
     } else {
       this.save.extendRun(this.distance, this.stage, this.distance - this.recordedAt.distance, this.runTotalTime - this.recordedAt.time);
     }
@@ -378,7 +424,8 @@ export class Game {
     this.platform.gameplayStop();
     this.sfx.play('portal', 0.9);
     this.camera.pulse(18);
-    this.energy += 100 * this.flow.multiplier;
+    // clear bonus grows with the stage; FLOW adds a little on top
+    this.energy += 5 + 2 * this.stage + this.flow.level * 2;
     this.vfx.emit(this.gen.portalPos, 60, 8, 0.4, 1.2, 1.5, 3);
     await new Promise((r) => setTimeout(r, 650));
     if (id !== this.runId) return;
@@ -388,6 +435,9 @@ export class Game {
     const stageCoins = this.bankStage();
     const rec = this.endless ? null : this.save.recordStage(this.stage, stageTime, stageCoins);
     if (rec?.bestTime && !rec.first) this.platform.happytime();
+    this.missions.set('stages', this.stage + 1);
+    if (this.stageFalls === 0) this.missions.count('cleanstage');
+    if (this.stage === 0 && stageTime < 40) this.missions.count('sky40');
     if (!this.endless && this.stage + 1 >= CAMPAIGN_STAGES) { await this.onVictory(id); return; }
     await this.nextStage(id, { stage: this.stage, total: CAMPAIGN_STAGES, endless: this.endless, time: stageTime, coins: stageCoins, rec, prevBestTime: prev?.bestTime ?? 0, prevBestCoins: prev?.bestCoins ?? 0, next: this.stageName(this.stage + 1), wallet: this.save.data.coins });
   }
@@ -415,13 +465,14 @@ export class Game {
     this.phase = 'dead';
     this.save.bankCoins(ESCAPE_BONUS);
     this.runCoins += ESCAPE_BONUS;
-    const beat = this.save.recordRun({ distance: this.distance, stages: CAMPAIGN_STAGES, coins: this.runCoins, time: this.runTotalTime, won: true });
+    this.missions.count('escapes');
+    const beat = this.save.recordRun({ distance: this.distance, stages: CAMPAIGN_STAGES, coins: this.runCoins, time: this.runTotalTime, won: true }, this.daily ? todayKey() : null);
     this.recordedAt = { distance: this.distance, time: this.runTotalTime };
     this.platform.happytime();
     this.sfx.play('flow_up', 1, 1.2);
     this.camera.pulse(20);
     const bestLine = `${this.bestLine()} · ◎ ${this.save.data.coins.toLocaleString()} COINS`;
-    const choice = await this.overlays.victory({ time: this.runTotalTime, coins: this.runCoins - ESCAPE_BONUS, bonus: ESCAPE_BONUS, distance: this.distance, fastest: beat.time, bestLine });
+    const choice = await this.overlays.victory({ time: this.runTotalTime, coins: this.runCoins - ESCAPE_BONUS, bonus: ESCAPE_BONUS, distance: this.distance, fastest: beat.time, bestLine, total: CAMPAIGN_STAGES });
     if (id !== this.runId) return;
     this.sfx.play('ui_confirm', 0.8);
     if (choice === 'again') await this.startRun(true);
@@ -526,8 +577,10 @@ export class Game {
       this.camera.kick(1);
       this.camera.pulse(14);
     }
-    const base = 3.6 + this.stage * 0.7;
-    let riftSpeed = (!this.started || this.runTime < 3 || this.riftGrace > 0 ? 0 : Math.min(base + 2.5, base + this.runTime * 0.05)) * m.stats.riftSlow;
+    // rift pressure: starts 3 s after the first move, ramps with stage and time; paused briefly after a fall.
+    // Late stages run faster than you can sprint: dash, slide and wall-run boosts are how you keep ahead.
+    const base = 3.8 + this.stage * 0.5;
+    let riftSpeed = (!this.started || this.runTime < 3 || this.riftGrace > 0 ? 0 : Math.min(Math.min(base + 2.5, 11), base + this.runTime * 0.06)) * m.stats.riftSlow;
     // during the collapse the Rift runs just faster than you can: stopping is fatal, moving forward is not
     if (this.collapsing && riftSpeed > 0) riftSpeed = Math.max(riftSpeed, 10.5 * m.stats.riftSlow);
     this.rift.speed = riftSpeed;
@@ -558,35 +611,67 @@ export class Game {
 
     const got = this.gen.collectGems(m.position, m.stats.magnetRadius);
     if (got) {
-      this.energy += got * 10 * this.flow.multiplier;
+      // one coin is one coin; FLOW x4+ doubles them, Lucky Coin rolls per coin
+      let n = got * (this.flow.level >= 3 ? 2 : 1);
+      for (let i = 0; i < got; i++) if (Math.random() < m.stats.luck) n++;
+      this.energy += n;
+      this.missions.count('coins', n);
       this.sfx.play('pickup', 0.5, 0.9 + this.flow.level * 0.08, 0.04);
       this.vfx.emit(new pc.Vec3(m.position.x, m.position.y + 1, m.position.z), 6, 4, 0.2, 0.4, 0, 2);
+    }
+    if (this.gen.collectStar(m.position, 1.6)) {
+      this.energy += STAR_COINS;
+      this.runStars++;
+      const first = this.save.recordStar(this.stage);
+      this.missions.count('stars');
+      this.missions.count('coins', STAR_COINS);
+      this.sfx.play('flow_up', 1, 1.4);
+      this.camera.pulse(10);
+      this.vfx.emit(new pc.Vec3(m.position.x, m.position.y + 1, m.position.z), 40, 7, 0.3, 1.0, 0.5, 3);
+      this.hud.showToast(`★ STAR FOUND · +${STAR_COINS} COINS`, first ? `FIRST STAR ON ${this.stageName(this.stage)}` : `${this.runStars} THIS RUN`);
     }
 
     for (const ev of m.events) {
       const up = this.flow.onEvent(ev);
-      if (up) { this.sfx.play('flow_up', 0.6, 0.8 + this.flow.level * 0.1); this.camera.pulse(6); }
+      if (up) {
+        this.sfx.play('flow_up', 0.6, 0.8 + this.flow.level * 0.1); this.camera.pulse(6);
+        this.energy += this.flow.level;   // FLOW x2 pays 1, x5 pays 4
+        this.missions.count('coins', this.flow.level);
+        this.missions.set('flow', this.flow.multiplier);
+      }
       switch (ev) {
-        case 'dash': this.camera.pulse(); this.sfx.play('dash', 0.7); this.vfx.emit(m.position, 14, 6, 0.3, 0.5, 0, 1); break;
+        case 'dash': this.camera.pulse(); this.sfx.play('dash', 0.7); this.vfx.emit(m.position, 14, 6, 0.3, 0.5, 0, 1); this.missions.count('dashes'); break;
         case 'jump': this.sfx.play('jump', 0.45, 1.1); break;
-        case 'djump': this.sfx.play('djump', 0.6, 1.2); this.vfx.emit(new pc.Vec3(m.position.x, m.position.y + 0.2, m.position.z), 10, 5, 0.25, 0.5); break;
+        case 'djump': this.sfx.play('djump', 0.6, 1.2); this.vfx.emit(new pc.Vec3(m.position.x, m.position.y + 0.2, m.position.z), 10, 5, 0.25, 0.5); this.missions.count('djumps'); break;
         case 'land': this.camera.kick(0.2); this.sfx.play('land', 0.5); break;
         case 'land-hard': this.camera.kick(0.8); this.sfx.play('land_hard', 0.8); this.vfx.emit(m.position, 12, 5, 0.25, 0.5); break;
-        case 'wallrun': this.sfx.play('wallrun', 0.6, 0.9); break;
+        case 'wallrun': this.sfx.play('wallrun', 0.6, 0.9); this.missions.count('wallruns'); break;
         case 'walljump': this.sfx.play('jump', 0.6, 1.3); this.camera.pulse(5); break;
         case 'slide': this.sfx.play('slide', 0.6, 0.8); break;
+        case 'gate': this.sfx.play('wallrun', 0.6, 1.5); this.camera.pulse(4); this.energy += 2; this.missions.count('gates'); this.missions.count('coins', 2); break;
         case 'vault': this.sfx.play('wallrun', 0.5, 1.3); break;
-        case 'grapple': this.sfx.play('grapple', 0.7); this.camera.pulse(6); break;
+        case 'grapple': this.sfx.play('grapple', 0.7); this.camera.pulse(6); this.missions.count('grapples'); break;
         case 'grapple-release': this.camera.pulse(8); break;
         case 'fell': this.respawnAtCheckpoint(); break;
       }
     }
     m.events.length = 0;
+    this.missions.set('distance', Math.round(this.distance));
 
     this.flow.update(dt, m.speedXZ, m.grounded);
-    this.env.setIntensity(this.flow.intensity01);
+    this.env.setIntensity(this.flow.intensity01, pc.math.clamp(1 - riftDist / 22, 0, 1));
+    if (byId(this.save.data.trail)?.trail === 'rainbow') {
+      this.rainbowT += dt * 0.6;
+      const h = this.rainbowT % 1;
+      this.vfx.setColor(new pc.Color(0.5 + 0.5 * Math.sin(h * 6.283), 0.5 + 0.5 * Math.sin(h * 6.283 + 2.09), 0.5 + 0.5 * Math.sin(h * 6.283 + 4.19)));
+    }
     this.vfx.trail(dt, m.position, (m.state === 'dash' ? 0.6 : 0) + this.flow.intensity01 * pc.math.clamp((m.speedXZ - 6) / 10, 0, 1));
     this.vfx.ambient(dt, m.position, this.biome().id);
+    // portal breath: a slow swirl of sparks around the ring when it is in view
+    if (m.position.distance(this.gen.portalPos) < 70 && Math.random() < 0.5) {
+      const a = Math.random() * Math.PI * 2;
+      this.vfx.emit(new pc.Vec3(this.gen.portalPos.x + Math.cos(a) * 2.3, this.gen.portalPos.y + Math.sin(a) * 2.3, this.gen.portalPos.z), 1, 0.6, 0.16, 1.2, 0, 0.4);
+    }
     this.vfx.update(dt);
 
     if (this.gen.atPortal(m.position)) { void this.onPortal(); input.endFrame(); return; }

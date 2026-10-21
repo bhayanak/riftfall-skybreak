@@ -131,12 +131,13 @@ export class Environment {
     this.frame.update();
   }
 
-  /** Transient FOV-independent "speed" feel: bump bloom + vignette with FLOW. */
-  setIntensity(flow01: number): void {
+  /** Transient "speed" feel: bloom + vignette with FLOW; the vignette closes in as the Rift gets near. */
+  setIntensity(flow01: number, danger01 = 0): void {
     if (!this.frame) return;
     const desk = this.device.profile === 'desktop';
     this.frame.bloom.intensity = (desk ? 0.035 : 0.02) + flow01 * (desk ? 0.03 : 0.015);
-    this.frame.vignette.intensity = 0.55 + flow01 * 0.25;
+    this.frame.vignette.intensity = 0.55 + flow01 * 0.2 + danger01 * 0.45;
+    this.frame.vignette.inner = 0.55 - danger01 * 0.25;
     this.frame.update();
   }
 }

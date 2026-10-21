@@ -85,9 +85,15 @@ export class IslandBuilder {
   private small: WorldModel[] = SMALL_SETS.sky;
   private crumbleMat!: pc.StandardMaterial;
   private topMat: pc.StandardMaterial | null = null;
+  private waterMat!: pc.StandardMaterial;
+  private biomeId = 'sky';
   private t = 0;
   /** 0..1 decoration multiplier (mobile profiles place fewer props). */
   quality = 1;
+  /** Scenery that moves on its own: clouds drift along +x, far rocks turn slowly. */
+  readonly drifting: { e: pc.Entity; vx: number; spin: number }[] = [];
+  /** Hanging waterfalls (sheet + splash ring) that shimmer. */
+  private falls: pc.Entity[] = [];
 
   constructor(app: pc.AppBase, private assets: Assets, private world: CollisionWorld, public rng: Rng) {
     app.root.addChild(this.root);
@@ -96,6 +102,8 @@ export class IslandBuilder {
   setBiome(b: Biome): void {
     this.wallMat = flat(b.stone.clone().mulScalar(0.9), 0.2);
     this.crumbleMat = emissive(b.rift, 0.6);
+    this.waterMat = emissive(new pc.Color(0.6, 0.85, 1.0), 0.9, 0.42, true);
+    this.biomeId = b.id;
     this.tintCache.clear();
     // the kit is authored for a sunny sky; other biomes pull vegetation/rock toward the biome palette
     this.biomeTint = b.id === 'sky' ? null : b.stone;
@@ -122,6 +130,8 @@ export class IslandBuilder {
   clear(): void {
     for (const c of this.root.children.slice()) c.destroy();
     this.islands.length = 0;
+    this.drifting.length = 0;
+    this.falls.length = 0;
     this.world.clear();
   }
 
@@ -157,6 +167,18 @@ export class IslandBuilder {
       under.setLocalPosition((this.rng.float() - 0.5) * s.w * 0.3, -m.h * sy - PLATFORM_MODELS[1].h * us * 1.4 * 0.75, (this.rng.float() - 0.5) * s.d * 0.3);
       if (this.biomeTint) this.tint(under, this.biomeTint);
       root.addChild(under);
+      // loose rocks dangling in the island's wake
+      for (let i = 0; i < 2; i++) {
+        const r = this.assets.spawn(this.rng.pick(['rock_1', 'rock_2'] as const));
+        const rs = 1.2 + this.rng.float() * 1.2;
+        r.setLocalScale(rs, rs, rs);
+        r.setLocalPosition((this.rng.float() - 0.5) * s.w * 0.8, -bodyH - 1.5 - this.rng.float() * 3, (this.rng.float() - 0.5) * s.d * 0.8);
+        r.setLocalEulerAngles(this.rng.float() * 40, this.rng.float() * 360, this.rng.float() * 40);
+        if (this.biomeTint) this.tint(r, this.biomeTint);
+        root.addChild(r);
+      }
+      // Sky Ruins: some big islands spill a waterfall off one side
+      if (this.biomeId === 'sky' && this.rng.chance(0.35)) this.waterfall(root, s, bodyH);
     }
 
     const isl: Island = { root, colliders, occluders, x: s.x, z: s.z, top: s.top, w: s.w, d: s.d, falling: 0 };
@@ -188,6 +210,59 @@ export class IslandBuilder {
     const c = new BoxCollider(new pc.Vec3(x, yBottom + h * 0.5, z), new pc.Vec3(1, h, len), undefined, 'wall');
     return this.world.add(c);
   }
+
+  /**
+   * Slide gate: a stone lintel across the lane with 1.1 m of clearance under it. Standing runners are stopped;
+   * sliding runners pass. Tagged 'gate' so Movement can start a slide from a standstill in front of it.
+   */
+  gate(x: number, top: number, z: number, width: number): BoxCollider {
+    const root = new pc.Entity('gate');
+    root.setPosition(x, top, z);
+    this.root.addChild(root);
+    const h = 1.8, clear = 1.1;
+    const wall = this.assets.spawn('ruin_wall_broken');
+    wall.setLocalScale(width / 1.99, h / 1.95, 1.6);
+    wall.setLocalPosition(0, clear, 0);
+    if (this.biomeTint) this.tint(wall, this.biomeTint);
+    root.addChild(wall);
+    for (const sx of [-1, 1]) {
+      const leg = this.assets.spawn('ruin_column_short');
+      leg.setLocalScale(1, (clear + 0.2) / 1.83, 1);
+      leg.setLocalPosition(sx * (width / 2 - 0.35), 0, 0);
+      if (this.biomeTint) this.tint(leg, this.biomeTint);
+      root.addChild(leg);
+    }
+    const torch = this.assets.spawn('ruin_torch');
+    torch.setLocalPosition(-(width / 2 - 0.35), clear + 0.3, -0.35);
+    root.addChild(torch);
+    const c = new BoxCollider(new pc.Vec3(x, top + clear + h / 2, z), new pc.Vec3(width, h, 0.5), undefined, 'gate');
+    this.world.add(c);
+    this.world.addOccluder(new BoxCollider(new pc.Vec3(x, top + clear + h / 2, z), new pc.Vec3(width, h, 0.6)));
+    return c;
+  }
+
+  private waterfall(root: pc.Entity, s: IslandSpec, bodyH: number): void {
+    const side = this.rng.chance(0.5) ? -1 : 1;
+    const lz = (this.rng.float() - 0.5) * s.d * 0.5;
+    const len = bodyH + 8 + this.rng.float() * 6;
+    const sheet = new pc.Entity('waterfall');
+    sheet.addComponent('render', { type: 'box', material: this.waterMat });
+    sheet.render!.castShadows = false;
+    sheet.setLocalScale(0.25, len, 1.2);
+    sheet.setLocalPosition(side * (s.w / 2 + 0.05), -len / 2 + 0.1, lz);
+    root.addChild(sheet);
+    const splash = new pc.Entity('splash');
+    splash.addComponent('render', { type: 'torus', material: this.waterMat });
+    splash.render!.castShadows = false;
+    splash.setLocalScale(1.1, 1.1, 1.1);
+    splash.setLocalEulerAngles(90, 0, 0);
+    splash.setLocalPosition(side * (s.w / 2 + 0.1), -len + 0.2, lz);
+    root.addChild(splash);
+    this.falls.push(sheet, splash);
+  }
+
+  /** Register a free-floating scenery entity to be animated. */
+  drift(e: pc.Entity, vx: number, spin: number): void { this.drifting.push({ e, vx, spin }); }
 
   /** Narrow stone runway (beam) built from ruin floor tiles over a thin slab collider. */
   beam(x: number, top: number, z: number, len: number, width = 1.6): Island {
@@ -243,6 +318,15 @@ export class IslandBuilder {
   /** Advance "falling" islands taken by the Rift, drifting islands, and armed crumble timers. */
   update(dt: number): void {
     this.t += dt;
+    for (const d of this.drifting) {
+      const p = d.e.getLocalPosition();
+      if (d.vx) d.e.setLocalPosition(p.x + d.vx * dt, p.y + Math.sin(this.t * 0.3 + p.z) * 0.002, p.z);
+      if (d.spin) d.e.rotateLocal(0, d.spin * dt, 0);
+    }
+    if (this.falls.length) {
+      const o = 0.36 + Math.sin(this.t * 7) * 0.04 + Math.sin(this.t * 11.3) * 0.03;
+      this.waterMat.opacity = o; this.waterMat.update();
+    }
     for (const isl of this.islands) {
       if (isl.motion && isl.falling <= 0) {
         const mo = isl.motion;

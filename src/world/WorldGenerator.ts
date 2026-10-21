@@ -20,11 +20,13 @@ function coinMaterial(): pc.StandardMaterial {
 
 export interface Anchor { pos: pc.Vec3; entity: pc.Entity; ring: pc.Entity; }
 export interface Gem { pos: pc.Vec3; entity: pc.Entity; taken: boolean; }
+/** One hidden star per stage, placed somewhere off the obvious line. */
+export interface Star { pos: pc.Vec3; entity: pc.Entity; taken: boolean; }
 export interface Checkpoint { index: number; spawn: pc.Vec3; }
 /** A one-time on-screen tip that fires when the player passes z. */
 export interface HintMarker { z: number; text: string; touch: string; shown: boolean; }
 
-type ChunkName = 'hop' | 'stairs' | 'zigzag' | 'dashgap' | 'pillars' | 'descend' | 'bridge' | 'canyon' | 'canyonGap' | 'wallrun' | 'grapple' | 'crumble' | 'drift' | 'fork';
+type ChunkName = 'hop' | 'stairs' | 'zigzag' | 'dashgap' | 'pillars' | 'descend' | 'bridge' | 'canyon' | 'canyonGap' | 'wallrun' | 'grapple' | 'crumble' | 'drift' | 'fork' | 'gates';
 
 const CHUNK_HINTS: Partial<Record<ChunkName, [string, string]>> = {
   hop: ['HOLD SPACE FOR A FULL JUMP. LANDED SHORT? YOU GRAB THE LEDGE AND PULL UP', 'HOLD JUMP FOR A FULL JUMP. SHORT? YOU GRAB THE LEDGE'],
@@ -40,6 +42,7 @@ const CHUNK_HINTS: Partial<Record<ChunkName, [string, string]>> = {
   crumble: ['GLOWING GROUND GIVES WAY — DO NOT STOP', 'GLOWING GROUND GIVES WAY — DO NOT STOP'],
   drift: ['DRIFTING ISLAND — TIME YOUR JUMP', 'DRIFTING ISLAND — TIME YOUR JUMP'],
   fork: ['TWO WAYS — THE HIGH ROAD HAS MORE COINS', 'TWO WAYS — THE HIGH ROAD HAS MORE COINS'],
+  gates: ['LOW GATE — PRESS C TO SLIDE UNDER IT', 'LOW GATE — TAP SLIDE TO GO UNDER IT'],
 };
 
 /** One hop of the route as seen by the validator. */
@@ -48,7 +51,7 @@ export interface RouteEdge { from: number; to: number; d: number; h: number; mov
 /** Intended way across for each template, used by the validator as the ceiling a gap may demand. */
 const INTENDED: Record<ChunkName, Move | 'wall' | 'grapple'> = {
   hop: 'jump', stairs: 'jump', zigzag: 'jump', dashgap: 'dash', pillars: 'jump', descend: 'jump', bridge: 'run',
-  canyon: 'jump', canyonGap: 'wall', wallrun: 'wall', grapple: 'grapple', crumble: 'jump', drift: 'jump', fork: 'djump',
+  canyon: 'jump', canyonGap: 'wall', wallrun: 'wall', grapple: 'grapple', crumble: 'jump', drift: 'jump', fork: 'djump', gates: 'jump',
 };
 
 interface Cursor { x: number; y: number; z: number; }
@@ -61,6 +64,9 @@ export class WorldGenerator {
   readonly builder: IslandBuilder;
   readonly anchors: Anchor[] = [];
   readonly gems: Gem[] = [];
+  star: Star | null = null;
+  /** candidate star spots pushed by templates, best first */
+  private starSpots: { pos: pc.Vec3; rank: number }[] = [];
   readonly checkpoints: Checkpoint[] = [];
   readonly hints: HintMarker[] = [];
   readonly spawn = new pc.Vec3();
@@ -68,6 +74,7 @@ export class WorldGenerator {
   portal!: pc.Entity;
   private portalRing!: pc.Entity;
   private portalCore!: pc.Entity;
+  private portalBeam!: pc.Entity;
   private portalCollider!: BoxCollider;
   private rng = new Rng(1);
   private coinMat!: pc.StandardMaterial;
@@ -95,6 +102,8 @@ export class WorldGenerator {
     this.builder.clear();
     this.anchors.length = 0;
     this.gems.length = 0;
+    this.star = null;
+    this.starSpots.length = 0;
     this.checkpoints.length = 0;
     this.hints.length = 0;
     this.via.clear();
@@ -137,7 +146,38 @@ export class WorldGenerator {
 
     // distant scenery islands for parallax (no colliders)
     this.scenery(cur.z, this.lowestTop());
+    this.placeStar();
     this.lastReport = this.validate();
+  }
+
+  /** Put the stage's hidden star on the best candidate spot (side roads, moving islands, far corners). */
+  private placeStar(): void {
+    if (!this.starSpots.length) {
+      // fall back to the far corner of the widest mid-route island
+      const isl = this.builder.islands.slice(2, -1).filter((i) => i.w >= 7).sort((a, b) => b.w - a.w)[0];
+      if (!isl) return;
+      const side = this.rng.chance(0.5) ? -1 : 1;
+      this.starSpots.push({ pos: new pc.Vec3(isl.x + side * (isl.w / 2 - 0.9), isl.top + 1.2, isl.z - isl.d / 2 + 0.9), rank: 0 });
+    }
+    this.starSpots.sort((a, b) => b.rank - a.rank);
+    const spot = this.starSpots[0].pos;
+    const e = this.assets.spawn('star');
+    e.setLocalScale(0.9, 0.9, 0.9);
+    for (const r of e.findComponents('render') as pc.RenderComponent[]) for (const mi of r.meshInstances) mi.material = emissive(new pc.Color(1, 0.9, 0.4), 2.2);
+    const glow = new pc.Entity('glow');
+    glow.addComponent('light', { type: 'point', color: new pc.Color(1, 0.85, 0.4), intensity: 2, range: 7, castShadows: false });
+    e.addChild(glow);
+    e.setPosition(spot);
+    this.builder.root.addChild(e);
+    this.star = { pos: spot.clone(), entity: e, taken: false };
+  }
+
+  /** Star within radius of pos (takes it). */
+  collectStar(pos: pc.Vec3, radius: number): boolean {
+    const s = this.star;
+    if (!s || s.taken || s.pos.distance(pos) > radius) return false;
+    s.taken = true; s.entity.enabled = false;
+    return true;
   }
 
   /**
@@ -196,6 +236,10 @@ export class WorldGenerator {
       g.entity.setEulerAngles(0, spin + g.pos.x * 40, 0);
       g.entity.setPosition(g.pos.x, g.pos.y + Math.sin(this.t * 2.5 + g.pos.z) * 0.12, g.pos.z);
     }
+    if (this.star && !this.star.taken) {
+      this.star.entity.setEulerAngles(0, this.t * 90, 0);
+      this.star.entity.setPosition(this.star.pos.x, this.star.pos.y + Math.sin(this.t * 2) * 0.2, this.star.pos.z);
+    }
     for (const a of this.anchors) {
       const hot = a === targetAnchor;
       a.entity.setEulerAngles(0, this.t * 60, 0);
@@ -209,6 +253,7 @@ export class WorldGenerator {
     const d = Math.max(0, 1 - playerPos.distance(this.portalPos) / 40);
     const s = 1 + Math.sin(this.t * 4) * 0.03 + d * 0.15;
     this.portalCore.setLocalScale(3.2 * s, 0.1, 3.2 * s);
+    this.portalBeam.setLocalScale(0.6 + Math.sin(this.t * 3) * 0.08, 60, 0.6 + Math.cos(this.t * 2.3) * 0.08);
   }
 
   /** Next unshown hint the player has reached, if any. */
@@ -310,18 +355,19 @@ export class WorldGenerator {
       case 'crumble': return this.crumble(cur, d);
       case 'drift': return this.drift(cur, d);
       case 'fork': return this.fork(cur, d);
+      case 'gates': return this.gates(cur, d);
     }
   }
 
   private templateOrder(n: number, difficulty: number, stage: number): ChunkName[] {
     // first run teaches one mechanic at a time, in a fixed order
     if (stage === 0) {
-      const teach: ChunkName[] = ['hop', 'zigzag', 'dashgap', 'bridge', 'canyon', 'stairs', 'grapple', 'pillars', 'descend', 'dashgap', 'canyon', 'grapple'];
+      const teach: ChunkName[] = ['hop', 'zigzag', 'gates', 'dashgap', 'bridge', 'canyon', 'stairs', 'grapple', 'pillars', 'descend', 'fork', 'dashgap', 'canyon', 'grapple', 'gates', 'crumble', 'drift', 'wallrun'];
       return teach.slice(0, n);
     }
-    const easy: ChunkName[] = ['hop', 'stairs', 'zigzag', 'bridge', 'pillars'];
-    const mid: ChunkName[] = ['dashgap', 'canyon', 'grapple', 'descend', 'crumble', 'drift', 'fork'];
-    const hard: ChunkName[] = ['wallrun', 'grapple', 'dashgap', 'canyonGap', 'crumble', 'fork'];
+    const easy: ChunkName[] = ['hop', 'stairs', 'zigzag', 'bridge', 'pillars', 'gates'];
+    const mid: ChunkName[] = ['dashgap', 'canyon', 'grapple', 'descend', 'crumble', 'drift', 'fork', 'gates'];
+    const hard: ChunkName[] = ['wallrun', 'grapple', 'dashgap', 'canyonGap', 'crumble', 'fork', 'gates'];
     const out: ChunkName[] = ['hop', 'stairs'];
     let last: ChunkName = 'stairs';
     for (let i = 2; i < n; i++) {
@@ -394,9 +440,12 @@ export class WorldGenerator {
     const g = this.fit('jump', 3.5 + Math.min(2.5, d * 1.0), 0);
     this.gemsLine(cur.x, cur.y, cur.z, cur.x, cur.y, cur.z - g, 3, 1.2);
     this.gap(cur, g);
-    const isl = this.isl(cur, 8 + this.rng.int(3), 8, { ruins: this.rng.chance(0.4) });
-    // Island Fracture: from the second stage some plain islands give way under you
-    if (this.stage >= 1 && this.rng.chance(0.25)) this.builder.markCrumble(isl);
+    const w = 8 + this.rng.int(3), dd = 8;
+    const isl = this.isl(cur, w, dd, { ruins: this.rng.chance(0.4) });
+    // Island Fracture: from the second stage some plain islands give way under you (more often later)
+    if (this.stage >= 1 && this.rng.chance(Math.min(0.5, 0.18 + this.stage * 0.03))) this.builder.markCrumble(isl);
+    // from stage 2 a plain island sometimes carries a slide gate across the lane
+    else if (this.stage >= 2 && this.rng.chance(Math.min(0.45, 0.1 + this.stage * 0.03))) this.builder.gate(cur.x, cur.y, isl.z, Math.min(w - 1, 6));
   }
 
   protected stairs(cur: Cursor, d: number): void {
@@ -537,7 +586,9 @@ export class WorldGenerator {
       const g = this.fit('jump', 3.2 + Math.min(1.5, d), 0, dx);
       this.gemsLine(cur.x, cur.y, cur.z, cur.x + dx, cur.y, cur.z - g, 2, 1);
       cur.x += dx; this.gap(cur, g);
-      this.builder.markCrumble(this.isl(cur, 4.5, 4.5, { decor: 0 }));
+      const isl = this.isl(cur, 4.5, 4.5, { decor: 0 });
+      this.builder.markCrumble(isl);
+      if (i === 1) this.starSpots.push({ pos: new pc.Vec3(isl.x, isl.top + 1.3, isl.z), rank: 1 });
     }
     const back = Math.abs(cur.x);
     cur.x = 0;
@@ -553,8 +604,24 @@ export class WorldGenerator {
     this.gap(cur, g);
     const isl = this.isl(cur, 6, 6, { decor: 0 });
     this.builder.setMotion(isl, amp, 3.2 + this.rng.float());
+    this.starSpots.push({ pos: new pc.Vec3(isl.x, isl.top + 1.3, isl.z), rank: 2 });
     this.gap(cur, this.fit('jump', 3.5 + Math.min(1.5, d), 0, amp));
     this.isl(cur, 8, 7, { ruins: this.rng.chance(0.5) });
+  }
+
+  /** a long runway with two or three low gates: slide under them without losing speed */
+  protected gates(cur: Cursor, d: number): void {
+    const g = this.fit('jump', 3.2 + Math.min(1.5, d), 0);
+    this.gap(cur, g);
+    const n = 2 + (d > 1.2 ? 1 : 0), len = 7 * n + 4, w = 7;
+    const z0 = cur.z;
+    this.isl(cur, w, len, { decor: 0.25 });
+    for (let i = 0; i < n; i++) {
+      const gz = z0 - 5 - i * 7;
+      this.builder.gate(cur.x, cur.y, gz, 6);
+      this.gem(cur.x, cur.y + 0.6, gz - 1.5);
+      this.gem(cur.x, cur.y + 0.6, gz + 1.5);
+    }
   }
 
   /** split path: a safe low road (trunk) and a higher side road with more coins; both rejoin ahead */
@@ -574,6 +641,7 @@ export class WorldGenerator {
     this.alt.set(high, entry);
     this.chunkOf.set(high, 'fork');
     this.gemsLine(cur.x + side * dx, cur.y + rise, hz + 2.5, cur.x + side * dx, cur.y + rise, hz - 2.5, 4, 0.6);
+    this.starSpots.push({ pos: new pc.Vec3(cur.x + side * dx, cur.y + rise + 1.3, hz - len / 2 + 0.8), rank: 3 });
     // rejoin: wide island both roads can reach (the high road drops onto it)
     this.gap(cur, this.fit('jump', 3.5, 0, dx));
     this.isl(cur, 9, 7, { ruins: this.rng.chance(0.5) });
@@ -613,6 +681,14 @@ export class WorldGenerator {
     glow.setLocalPosition(0, 2.6, 1);
     this.portal.addChild(glow);
 
+    // a beam of rift light reaching into the sky: the portal is visible from the start of the stage
+    this.portalBeam = new pc.Entity('beam');
+    this.portalBeam.addComponent('render', { type: 'cylinder', material: emissive(biome.rift, 0.9, 0.22, true) });
+    this.portalBeam.render!.castShadows = false;
+    this.portalBeam.setLocalScale(0.6, 60, 0.6);
+    this.portalBeam.setLocalPosition(0, 32, 0);
+    this.portal.addChild(this.portalBeam);
+
     this.builder.root.addChild(this.portal);
     this.portalCollider = new BoxCollider(new pc.Vec3(x, y + 2.4, z), new pc.Vec3(4.5, 5, 1.6), undefined, 'checkpoint');
   }
@@ -631,6 +707,7 @@ export class WorldGenerator {
       e.setLocalScale(s, s * this.rng.range(0.8, 1.4), s);
       e.setEulerAngles(0, this.rng.float() * 360, 0);
       this.builder.root.addChild(e);
+      this.builder.drift(e, 0, this.rng.range(-3, 3));
       if (this.rng.chance(0.5)) {
         const t = this.assets.spawn(this.rng.pick(['tree', 'pine_1', 'twisted_tree_1'] as const));
         t.setPosition(x, y + 3.63 * s * this.rng.range(0.8, 1.4), z);
@@ -649,6 +726,7 @@ export class WorldGenerator {
       c.setLocalScale(s, s * 0.7, s);
       c.setEulerAngles(0, this.rng.float() * 360, 0);
       this.builder.root.addChild(c);
+      this.builder.drift(c, this.rng.range(0.4, 1.2), 0);
     }
   }
 }
