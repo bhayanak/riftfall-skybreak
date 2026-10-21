@@ -26,6 +26,11 @@ export class CameraRig {
   pitch = CAM.defaultPitch;
   /** Current boom length after collision; the game fades the player out when this gets very short. */
   boomDist = CAM.distance;
+  /** Title screen: closer, lower, framing the runner. */
+  menuMode = false;
+  /** Touch devices: the camera swings behind the direction of travel when the player is not looking around. */
+  autoFollow = false;
+  private lookIdle = 0;
   private target = new pc.Vec3();
   private smoothTarget = new pc.Vec3();
   private fovPulse = 0;
@@ -37,6 +42,7 @@ export class CameraRig {
 
   constructor(app: pc.AppBase, reduceEffects: boolean, private world: CollisionWorld) {
     this.reduceShake = reduceEffects;
+    this.autoFollow = reduceEffects;
     this.entity = new pc.Entity('camera');
     this.entity.addComponent('camera', {
       fov: CAM.baseFov,
@@ -64,23 +70,38 @@ export class CameraRig {
     return new pc.Vec3(-Math.sin(y), 0, -Math.cos(y));
   }
 
-  update(dt: number, input: Input, focus: pc.Vec3, speedXZ: number): void {
+  update(dt: number, input: Input, focus: pc.Vec3, speedXZ: number, facing?: pc.Vec3): void {
     this.yaw -= input.look.x * CAM.mouseSens;
     this.pitch = pc.math.clamp(this.pitch + input.look.y * CAM.mouseSens, CAM.pitchMin, CAM.pitchMax);
+    // on touch, ease behind the runner once the thumb has left the look area for a moment
+    const looking = Math.abs(input.look.x) + Math.abs(input.look.y) > 0.5;
+    this.lookIdle = looking ? 0 : this.lookIdle + dt;
+    if (this.autoFollow && !this.menuMode && facing && speedXZ > 3 && this.lookIdle > 0.6) {
+      const want = Math.atan2(-facing.x, -facing.z) * pc.math.RAD_TO_DEG;
+      let delta = ((want - this.yaw + 540) % 360) - 180;
+      this.yaw += delta * (1 - Math.exp(-dt * 2.5));
+      this.pitch += (CAM.defaultPitch - this.pitch) * (1 - Math.exp(-dt * 1.5));
+    }
 
-    this.target.set(focus.x, focus.y + CAM.height, focus.z);
+    const height = this.menuMode ? 1.1 : CAM.height;
+    this.target.set(focus.x, focus.y + height, focus.z);
+    if (this.menuMode) {
+      // look a little to the camera's right so the runner stands in the open left third, clear of the cards
+      const y = this.yawRad;
+      this.target.x += Math.cos(y) * 1.4; this.target.z -= Math.sin(y) * 1.4;
+    }
     const t = 1 - Math.exp(-dt * CAM.followLag);
     this.smoothTarget.lerp(this.smoothTarget, this.target, t);
     // never lag vertically on big drops — it reads as camera "detaching"
     if (Math.abs(this.target.y - this.smoothTarget.y) > 2) this.smoothTarget.y = this.target.y;
 
-    const yawR = this.yawRad, pitchR = this.pitch * pc.math.DEG_TO_RAD;
+    const yawR = this.yawRad, pitchR = (this.menuMode ? 6 : this.pitch) * pc.math.DEG_TO_RAD;
     const cp = Math.cos(pitchR);
     // camera sits behind the player along +Z in yaw space (player faces -Z at yaw 0)
     this.tmp.set(Math.sin(yawR) * cp, Math.sin(pitchR), Math.cos(yawR) * cp);
 
     // shorten the boom if geometry (or a visual occluder: island body, tree canopy) sits between focus and camera
-    let dist = CAM.distance;
+    let dist = this.menuMode ? 3.6 : CAM.distance;
     const hit = this.world.raycastCamera(this.smoothTarget, this.tmp, CAM.distance + 0.3);
     if (hit) dist = Math.max(0.5, hit.dist - 0.3);
     this.boomDist += (dist - this.boomDist) * (dist < this.boomDist ? 1 : 1 - Math.exp(-dt * 6));

@@ -17,37 +17,37 @@ import { UpgradeDeck } from '../progression/Upgrade';
 import { Sfx } from '../audio/Sfx';
 import { Music } from '../audio/Music';
 import { Save } from '../progression/Save';
+import { SHOP, byId, type ShopItem } from '../progression/Shop';
 import { Platform } from '../platform/Platform';
 import { Hud } from '../ui/Hud';
 import { TouchControls } from '../ui/TouchControls';
-import { Overlays } from '../ui/Overlays';
+import { Overlays, type ShopController } from '../ui/Overlays';
 
-type Phase = 'loading' | 'playing' | 'portal' | 'upgrade' | 'dead';
+type Phase = 'loading' | 'menu' | 'playing' | 'portal' | 'upgrade' | 'dead';
 const BIOME_ORDER: BiomeId[] = ['sky', 'fire', 'void'];
 /** Stage at which the Rift Titan starts stalking the route. */
 const TITAN_STAGE = 3;
-/** Runner suits, unlocked by the best stage ever reached (index = stages cleared). */
-const SUITS: { name: string; suit: pc.Color; accent: pc.Color }[] = [
-  { name: 'SKYRUNNER', suit: new pc.Color(0.055, 0.075, 0.16), accent: new pc.Color(0.10, 0.62, 0.66) },
-  { name: 'EMBER', suit: new pc.Color(0.16, 0.05, 0.05), accent: new pc.Color(0.95, 0.55, 0.15) },
-  { name: 'VOIDWALKER', suit: new pc.Color(0.09, 0.05, 0.16), accent: new pc.Color(0.75, 0.35, 1.0) },
-  { name: 'TITANSLAYER', suit: new pc.Color(0.85, 0.85, 0.88), accent: new pc.Color(1.0, 0.8, 0.3) },
-];
+
+/** Same route for everyone on a given UTC day. */
+function dailySeed(): number {
+  const d = new Date();
+  let h = d.getUTCFullYear() * 10000 + (d.getUTCMonth() + 1) * 100 + d.getUTCDate();
+  h = Math.imul(h ^ (h >>> 16), 2246822519) >>> 0;
+  h = Math.imul(h ^ (h >>> 13), 3266489917) >>> 0;
+  return ((h ^ (h >>> 16)) >>> 0) % 1000000 + 1;
+}
 
 /** Seed from the URL (?seed=123 or ?daily), else random. */
 function pickSeed(): { seed: number; daily: boolean } {
   const q = new URLSearchParams(location.search);
-  if (q.has('daily')) {
-    const d = new Date();
-    let h = d.getUTCFullYear() * 10000 + (d.getUTCMonth() + 1) * 100 + d.getUTCDate();
-    h = Math.imul(h ^ (h >>> 16), 2246822519) >>> 0;
-    h = Math.imul(h ^ (h >>> 13), 3266489917) >>> 0;
-    return { seed: ((h ^ (h >>> 16)) >>> 0) % 1000000 + 1, daily: true };
-  }
+  if (q.has('daily')) return { seed: dailySeed(), daily: true };
   const s = Number(q.get('seed'));
   if (Number.isFinite(s) && s > 0) return { seed: s | 0, daily: false };
   return { seed: (Date.now() % 100000) | 0, daily: false };
 }
+
+/** Movement never reads from this: used to keep the player idle behind the title screen. */
+const NO_INPUT = { move: { x: 0, y: 0 }, wasPressed: () => false, wasReleased: () => false, isHeld: () => false } as unknown as Input;
 
 export class Game {
   readonly app: pc.AppBase;
@@ -74,7 +74,7 @@ export class Game {
 
   phase: Phase = 'loading';
   seed: number;
-  readonly daily: boolean;
+  daily: boolean;
   stage = 0;              // 0 sky, 1 fire, 2 void, 3 sky(harder)...
   energy = 0;
   distance = 0;           // total this run, across stages
@@ -89,6 +89,7 @@ export class Game {
   private seenHowTo = false;
   private helpOpen = false;
   private collapsing = false;
+  private booted = false;
 
   private constructor(app: pc.AppBase, canvas: HTMLCanvasElement, device: DeviceInfo) {
     this.app = app;
@@ -156,23 +157,88 @@ export class Game {
     this.player.movement.anchorProvider = (pos, fwd, range) => this.gen.findAnchor(pos, fwd, range)?.pos ?? null;
 
     this.platform.loadingStop();
-    await this.startRun(true);
+    await this.startRun(true, false);
+    this.booted = true;
+    void this.menu();   // the title loop lives as long as the page; create() must resolve now
   }
+
+  // ------------------------------------------------------------------------------------ title / shop
+  private bestLine(): string {
+    const s = this.save.data;
+    return `BEST ${s.bestDistance} m · STAGE ${s.bestStage + 1} · ${s.runs} RUN${s.runs === 1 ? '' : 'S'}`;
+  }
+
+  /** Title screen loop: play / daily toggle / wardrobe / controls. Returns when a run launches. */
+  private async menu(): Promise<void> {
+    this.phase = 'menu';
+    this.hud.setVisible(false);
+    for (;;) {
+      const choice = await this.overlays.startScreen({ coins: this.save.data.coins, best: this.bestLine(), daily: this.daily, touch: this.device.isTouch });
+      this.sfx.play('ui_select', 0.5);
+      if (choice === 'play') break;
+      if (choice === 'daily') {
+        this.daily = !this.daily;
+        this.seed = this.daily ? dailySeed() : (Date.now() % 100000) | 0;
+        await this.startRun(true, false);
+      } else if (choice === 'shop') {
+        await this.overlays.shop(this.shopController(), this.device.isTouch);
+      } else {
+        await this.overlays.howToPlay(this.device.isTouch);
+        this.seenHowTo = true;
+      }
+    }
+    this.sfx.play('ui_confirm', 0.8);
+    this.hud.setVisible(true);
+    this.launch();
+  }
+
+  private shopController(): ShopController {
+    return {
+      items: SHOP,
+      coins: () => this.save.data.coins,
+      status: (it) => {
+        if (!this.save.owns(it.id)) return 'buy';
+        const worn = it.kind === 'suit' ? this.save.data.suit : it.kind === 'trail' ? this.save.data.trail : null;
+        return worn === null || worn === it.id ? 'equipped' : 'owned';
+      },
+      act: (it) => {
+        if (!this.save.owns(it.id)) {
+          if (!this.save.buy(it.id, it.price)) { this.sfx.play('ui_select', 0.5, 0.6); return `NEED ${(it.price - this.save.data.coins).toLocaleString()} MORE COINS — EARN THEM BY RUNNING`; }
+          this.sfx.play('flow_up', 0.8, 1.1);
+          if (it.kind === 'power') return `${it.name} IS NOW ACTIVE ON EVERY RUN`;
+        } else this.sfx.play('ui_confirm', 0.6);
+        if (it.kind === 'suit') { this.save.equip('suit', it.id); this.applySuit(); return `WEARING ${it.name}`; }
+        if (it.kind === 'trail') { this.save.equip('trail', it.id); this.applyTrail(this.biome()); return `TRAIL: ${it.name}`; }
+        return `${it.name} IS ACTIVE`;
+      },
+    };
+  }
+
+  private applySuit(): void {
+    const it = byId(this.save.data.suit) ?? byId('suit.skyrunner')!;
+    if (it.suit) this.player.setSuit(it.suit.suit, it.suit.accent);
+  }
+  private applyTrail(b: { rift: pc.Color }): void {
+    const it = byId(this.save.data.trail);
+    this.vfx.setColor(it?.trail ?? b.rift);
+  }
+  private ownedPowers(): ShopItem[] { return SHOP.filter((i) => i.kind === 'power' && this.save.owns(i.id)); }
 
   // ------------------------------------------------------------------------------------ run flow
   private biome() { return BIOMES[BIOME_ORDER[this.stage % BIOME_ORDER.length]]; }
-  private suitIndex(): number { return Math.min(SUITS.length - 1, this.save.data.bestStage); }
-  private applySuit(): void { const s = SUITS[this.suitIndex()]; this.player.setSuit(s.suit, s.accent); }
 
-  private async startRun(fresh: boolean): Promise<void> {
+  /** Build the stage. `launch` = start playing right away (portal transitions); false = sit behind the title screen. */
+  private async startRun(fresh: boolean, launch = true): Promise<void> {
     this.phase = 'loading';
     const id = ++this.runId;
     if (fresh) {
       this.stage = 0; this.energy = 0; this.distance = 0; this.distanceBase = 0;
       this.player.movement.stats = defaultStats();
+      for (const p of this.ownedPowers()) p.apply?.(this.player.movement.stats);
       this.deck.reset();
       this.flow.reset();
-      if (!this.daily) this.seed = (this.seed * 1103515245 + 12345) >>> 0;
+      // the URL / daily seed is used as-is for the first route; every later route is a fresh one
+      if (!this.daily && this.booted) this.seed = (this.seed * 1103515245 + 12345) >>> 0;
     }
     const b = this.biome();
     this.overlays.loading(0.9);
@@ -186,7 +252,7 @@ export class Game {
     }
     this.player.movement.killY = this.gen.lowestTop() - 30;
     this.rift.setColor(b.rift);
-    this.vfx.setColor(b.rift);
+    this.applyTrail(b);
     this.titan.setColor(b.rift);
     if (this.stage >= TITAN_STAGE) this.titan.start(this.gen.spawn); else this.titan.stop();
     this.hud.setBiome(b.name + (this.daily ? ' · DAILY' : ''));
@@ -201,6 +267,15 @@ export class Game {
     this.camera.snapTo(this.gen.spawn, 0);
     this.rift.reset(this.gen.spawn.z + 55, 0);
     this.hud.setPrompt(null);
+    if (!launch) { this.phase = 'menu'; return; }
+    this.launch();
+  }
+
+  /** Hand control to the player for the stage that startRun() built. */
+  private launch(): void {
+    const b = this.biome();
+    this.camera.menuMode = false;
+    this.camera.snapTo(this.player.movement.position, 0);   // the title orbit leaves the yaw anywhere; face the route
     this.overlays.hide();
     this.phase = 'playing';
     this.platform.gameplayStart();
@@ -271,18 +346,16 @@ export class Game {
     this.vfx.emit(this.player.movement.position, 50, 10, 0.4, 1, 1, 2);
     await new Promise((r) => setTimeout(r, 900));
     if (id !== this.runId) return;
-    const prevSuit = this.suitIndex();
     const beat = this.save.recordRun(this.distance, this.energy, this.stage);
     if (beat.distance || beat.stage) this.platform.happytime();
-    const newSuit = this.suitIndex() > prevSuit ? SUITS[this.suitIndex()].name : '';
-    if (newSuit) this.applySuit();
-    const s = this.save.data;
-    const best = `BEST ${s.bestDistance} m · STAGE ${s.bestStage + 1} · ${s.runs} RUN${s.runs === 1 ? '' : 'S'} · SEED ${this.seed}${this.daily ? ' (DAILY)' : ''}`;
-    const record = newSuit ? `NEW SUIT — ${newSuit}` : beat.distance ? 'NEW DISTANCE RECORD' : beat.stage ? 'NEW STAGE RECORD' : beat.energy ? 'NEW ENERGY RECORD' : '';
-    await this.overlays.runOver(reason, this.energy, this.flow.best, this.distance, this.stage, best, record);
+    const newSuit = beat.unlocked.map((u) => byId(u)?.name).filter(Boolean)[0] ?? '';
+    const best = `${this.bestLine()} · ◎ ${this.save.data.coins.toLocaleString()} COINS · SEED ${this.seed}${this.daily ? ' (DAILY)' : ''}`;
+    const record = newSuit ? `NEW SUIT UNLOCKED — ${newSuit}` : beat.distance ? 'NEW DISTANCE RECORD' : beat.stage ? 'NEW STAGE RECORD' : beat.energy ? 'NEW ENERGY RECORD' : '';
+    const choice = await this.overlays.runOver(reason, this.energy, this.flow.best, this.distance, this.stage, best, record);
     if (id !== this.runId) return;
     this.sfx.play('ui_confirm', 0.8);
-    await this.startRun(true);
+    if (choice === 0) await this.startRun(true);
+    else { await this.startRun(true, false); await this.menu(); }
   }
 
   // ------------------------------------------------------------------------------------ frame
@@ -303,9 +376,20 @@ export class Game {
       if (input.wasPressed('pick1')) this.overlays.pick(0);
       else if (input.wasPressed('pick2')) this.overlays.pick(1);
       else if (input.wasPressed('pick3')) this.overlays.pick(2);
-      else if (input.wasPressed('jump') || input.wasPressed('confirm') || (this.helpOpen && input.wasPressed('help'))) this.overlays.pick(this.phase === 'dead' || this.helpOpen ? 0 : this.overlays.hover);
+      else if (input.wasPressed('jump') || input.wasPressed('confirm')) this.overlays.pickPrimary();
+      else if (input.wasPressed('help')) this.overlays.pickEscape();
       // keep the world alive behind the card (coins spin, portal breathes) but freeze the player/rift
       if (this.gen && this.player) this.gen.update(dt, this.player.movement.position);
+      if (this.phase === 'menu' && this.player) {
+        // title screen: slow orbit around the idle runner so suits and trails can be admired
+        const m = this.player.movement;
+        this.player.update(dt, NO_INPUT, this.camera.yawRad);
+        m.events.length = 0;
+        this.camera.menuMode = true;
+        this.camera.yaw += dt * 9;
+        this.camera.update(dt, input, m.position, 0, m.facing);
+        this.vfx.update(dt);
+      }
       input.endFrame();
       return;
     }
@@ -334,7 +418,7 @@ export class Game {
       if (isl && this.gen.builder.stepOn(isl)) { this.sfx.play('land_hard', 0.6, 1.4); this.camera.kick(0.4); }
     }
     this.titan.update(dt, m.position, this.gen, true);
-    this.camera.update(dt, input, m.position, m.speedXZ);
+    this.camera.update(dt, input, m.position, m.speedXZ, m.facing);
     this.camera.setFlow(this.flow.intensity01);
     // the camera got pushed into the player's back: hide the body instead of showing the inside of it
     this.player.setVisible(this.camera.boomDist > 1.3);

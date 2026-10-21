@@ -20,7 +20,9 @@ Every run is a new seeded route. `?seed=123` replays a route; `?daily` gives eve
 
 Land a little short and you grab the ledge and pull up. Glowing islands give way after you land — keep moving. Coins and tricks build **FLOW**, which multiplies your energy. Reach the portal before the Rift reaches you.
 
-On a phone: left thumb to move, drag the right side to look, on-screen buttons for Jump / Dash / Grapple.
+Every run's energy is banked as **coins**. Spend them in the **Wardrobe** on the title screen: suits and trails (cosmetic) and powers (small permanent perks — faster feet, longer grapple, a Rift Shield to start every run). Reaching a new biome also unlocks its suit for free.
+
+On a phone: put your thumb anywhere on the lower-left to run (a short push is a full sprint), drag the right side to look, and use the on-screen buttons for Jump / Dash / Grapple / Slide.
 
 ## Running locally
 

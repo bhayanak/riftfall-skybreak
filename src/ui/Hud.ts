@@ -15,6 +15,12 @@ export class Hud {
   private lastRift = -999;
   private promptShown = false;
 
+  /** Hide the whole HUD (title screen). */
+  setVisible(v: boolean): void {
+    const hud = document.getElementById('hud');
+    if (hud) hud.style.opacity = v ? '' : '0';
+  }
+
   setPrompt(text: string | null): void {
     const show = !!text;
     if (show !== this.promptShown) { this.prompt.hidden = !show; this.promptShown = show; }
