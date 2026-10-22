@@ -44,7 +44,8 @@ canvas#game { position: fixed; inset: 0; width: 100%; height: 100%; display: blo
 @keyframes pulse { from { opacity: 1; } to { opacity: 0.45; } }
 #hint {
   position: absolute; left: calc(14px + var(--safe-l)); bottom: calc(14px + var(--safe-b));
-  font-size: clamp(12px, 1.8vmin, 16px); letter-spacing: 0.18em; color: var(--hud-dim); transition: opacity 400ms;
+  max-width: min(64vw, calc(100vw - 300px - var(--safe-l) - var(--safe-r)));   /* never runs under the RIFT / PORTAL readout */
+  font-size: clamp(12px, 1.8vmin, 16px); line-height: 1.35; letter-spacing: 0.18em; color: var(--hud-dim); transition: opacity 400ms;
 }
 
 #touch { position: fixed; inset: 0; pointer-events: none; }
