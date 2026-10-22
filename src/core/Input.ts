@@ -44,6 +44,9 @@ export class Input {
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup', this.onKeyUp);
     window.addEventListener('blur', () => this.clearAll());
+    // inside a portal iframe the page must never scroll, zoom or pop a context menu under the game
+    window.addEventListener('wheel', (e) => { if (!(e.target as Element | null)?.closest?.('#overlay')) e.preventDefault(); }, { passive: false });
+    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
     canvas.addEventListener('click', () => {
       if (!this.pointerLocked && !matchMedia('(pointer: coarse)').matches) canvas.requestPointerLock?.();
@@ -122,8 +125,9 @@ export class Input {
   private onKeyDown = (e: KeyboardEvent): void => {
     if (e.repeat) return;
     this.keys.add(e.code);
+    if (e.code.startsWith('Arrow') || e.code === 'Space') e.preventDefault();   // no page scroll under the game
     const a = KEYS[e.code];
-    if (a) { this.press(a); if (a === 'jump') e.preventDefault(); }
+    if (a) this.press(a);
   };
   private onKeyUp = (e: KeyboardEvent): void => {
     this.keys.delete(e.code);

@@ -1,6 +1,7 @@
 # Headless Blender: build the shipped character + world kit GLBs in public/assets/.
 # usage: blender -b -P tools/build-world-kit.py -- [player] [world] [all]
 import bpy, sys, os, glob
+from mathutils import Vector
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(ROOT, "assets-source")
@@ -174,18 +175,87 @@ if WHAT & {"player", "all"}:
         if hair_arm:
             bpy.data.objects.remove(hair_arm, do_unlink=True)
         log(f"  hair {stem}: {k} mesh(es)")
-    # some hairstyles were authored for a slightly smaller skull: push them out along their normals so the
-    # head does not show through the top
-    INFLATE = {"Hair_Long": 0.032, "Hair_Buns": 0.012, "Hair_BuzzedFemale": 0.008}
-    for o in bpy.data.objects:
-        if o.type == "MESH" and o.name in INFLATE:
-            me = o.data
-            normals = [v.normal.copy() for v in me.vertices]
-            for v, n in zip(me.vertices, normals): v.co += n * INFLATE[o.name]
-            me.update()
-            log(f"  inflated {o.name} by {INFLATE[o.name]}")
+    # The hairstyles were authored for a smaller skull than the superhero head: their crowns sit 4-9 cm inside it, so
+    # the scalp showed through. Give each one a scalp of its own: the skull polygons above the hairline, copied from
+    # the body, pushed out 1 cm, painted with that hairstyle's main colour and merged into the hair mesh (same skin
+    # weights, so it deforms with the head). A light inflate on top keeps the strands clear of the new scalp.
+    import bmesh
+    from collections import Counter
     fix_images(UBC)
     resize_images(1024)
+    body = next(o for o in bpy.data.objects if o.type == "MESH"
+                and any(ms.material and "Superhero" in ms.material.name for ms in o.material_slots))
+    bmw = body.matrix_world
+    bco = [bmw @ v.co for v in body.data.vertices]
+    bnrm = [(bmw.to_3x3() @ v.normal).normalized() for v in body.data.vertices]
+    crown = max(c.z for c in bco)
+    head_c = sum((c for c in bco if c.z > crown - 0.1), Vector()) / max(1, sum(1 for c in bco if c.z > crown - 0.1))
+    # hairline depth below the crown: front (forehead, Blender -Y is the character's forward) / back and sides
+    CAPS = {"Hair_Long": (0.12, 0.16), "Hair_Buns": (0.12, 0.16), "Hair_Buzzed": (0.10, 0.15), "Hair_BuzzedFemale": (0.11, 0.15)}
+    INFLATE = {"Hair_Long": 0.012, "Hair_Buns": 0.008, "Hair_BuzzedFemale": 0.004, "Hair_Buzzed": 0.0}
+    gname = {g.index: g.name for g in body.vertex_groups}
+    for hair in [o for o in bpy.data.objects if o.type == "MESH" and o.name in CAPS]:
+        front_d, back_d = CAPS[hair.name]
+        me = hair.data
+        if INFLATE.get(hair.name, 0):
+            normals = [v.normal.copy() for v in me.vertices]
+            for v, n in zip(me.vertices, normals): v.co += n * INFLATE[hair.name]
+            me.update()
+        bm = bmesh.new(); bm.from_mesh(me)
+        uv_layer = bm.loops.layers.uv.verify()
+        deform = bm.verts.layers.deform.verify()
+        # the scalp's texel: of all texels the hairstyle uses (weighted by use), the one closest to its average colour,
+        # so a root-to-tip gradient texture yields the hair's overall tone rather than its darkest root
+        bins = Counter((round(l[uv_layer].uv.x * 48), round(l[uv_layer].uv.y * 48)) for f in bm.faces for l in f.loops)
+        img = None
+        hmat = me.materials[0] if me.materials else None
+        if hmat and hmat.use_nodes:
+            img = next((n.image for n in hmat.node_tree.nodes if n.type == "TEX_IMAGE" and n.image), None)
+        bx, by = bins.most_common(1)[0][0]
+        main_uv = Vector((bx / 48, by / 48))
+        if img and len(img.pixels) >= 4:
+            w, h = img.size
+            px = img.pixels[:]
+            def texel(u, v):
+                x = int(u * w) % w; y = int(v * h) % h
+                k = (y * w + x) * 4
+                return Vector(px[k:k + 3])
+            samples = [(texel(bx / 48, by / 48), n, (bx / 48, by / 48)) for (bx, by), n in bins.items()]
+            total = sum(n for _, n, _ in samples)
+            avg = sum((c * n for c, n, _ in samples), Vector()) / max(1, total)
+            main_uv = Vector(min(samples, key=lambda s: (s[0] - avg).length)[2])
+        inv = hair.matrix_world.inverted()
+        vg_index = {g.name: g.index for g in hair.vertex_groups}
+        def group_index(name):
+            if name not in vg_index:
+                vg_index[name] = hair.vertex_groups.new(name=name).index
+            return vg_index[name]
+        new_verts = {}
+        faces = 0
+        for p in body.data.polygons:
+            centre = sum((bco[i] for i in p.vertices), Vector()) / len(p.vertices)
+            depth = front_d if centre.y < head_c.y - 0.03 else back_d
+            if min(bco[i].z for i in p.vertices) < crown - depth: continue
+            if abs(centre.x - head_c.x) > 0.082 and centre.z < crown - 0.1: continue   # ears stay bare
+            vs = []
+            for i in p.vertices:
+                if i not in new_verts:
+                    v = bm.verts.new(inv @ (bco[i] + bnrm[i] * 0.01))
+                    for g in body.data.vertices[i].groups:
+                        v[deform][group_index(gname[g.group])] = g.weight
+                    new_verts[i] = v
+                vs.append(new_verts[i])
+            try:
+                f = bm.faces.new(vs)
+            except ValueError:
+                continue
+            f.material_index = 0
+            f.smooth = True   # shared vertices on export (flat faces would quadruple the scalp's weight)
+            for l in f.loops: l[uv_layer].uv = main_uv
+            faces += 1
+        bm.normal_update()
+        bm.to_mesh(me); bm.free(); me.update()
+        log(f"  scalp for {hair.name}: {faces} faces, uv {main_uv.x:.2f},{main_uv.y:.2f}, inflate {INFLATE.get(hair.name, 0)}")
     for o in bpy.data.objects:
         if o.type == "MESH":
             for ms in o.material_slots:

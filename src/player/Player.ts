@@ -21,11 +21,15 @@ export class Player {
   private lean = 0;
   private head: pc.Entity | null;
   private spine: pc.Entity | null;
-  /** gear per slot: root entity (parented to visual) + the bone it follows + its offset from that bone */
-  private gear = new Map<GearSlot, { root: pc.Entity; bone: pc.Entity | null; offset: pc.Vec3; style: string }>();
+  /** gear per slot: root entity + the bone it follows + its offset from that bone; `attached` = parented to the bone itself */
+  private gear = new Map<GearSlot, { root: pc.Entity; bone: pc.Entity | null; offset: pc.Vec3; style: string; attached: boolean }>();
   private capeT = 0;
+  /** head bone in bind pose: inverse bind matrix (model space -> bone space) and its position, from the skin */
+  private headBind: { ibp: pc.Mat4; pos: pc.Vec3 } | null = null;
+  private gfx: pc.GraphicsDevice;
 
   constructor(app: pc.AppBase, assets: Assets, world: CollisionWorld) {
+    this.gfx = app.graphicsDevice;
     this.movement = new Movement(world);
     this.entity = new pc.Entity('player');
     this.visual = new pc.Entity('player-visual');
@@ -38,6 +42,12 @@ export class Player {
     this.anim = new PlayerAnimation(this.model, assets.animTracks());
     this.head = this.model.findByName('Head') as pc.Entity | null;
     this.spine = this.model.findByName('spine_03') as pc.Entity | null;
+    const skin = (this.model.findComponents('render') as pc.RenderComponent[]).flatMap((r) => r.meshInstances).find((mi) => mi.skinInstance)?.skinInstance?.skin;
+    const hi = skin ? skin.boneNames.indexOf('Head') : -1;
+    if (skin && hi >= 0) {
+      const ibp = skin.inverseBindPose[hi].clone();
+      this.headBind = { ibp, pos: ibp.clone().invert().getTranslation() };
+    }
     this.setHair('Hair_SimpleParted');
 
     this.rope = new pc.Entity('rope');
@@ -106,6 +116,19 @@ export class Player {
       parent.addChild(e);
       return e;
     };
+    // a ring with its own proportions (the torus primitive's tube is far too fat for frames and straps); lies flat in XZ like the primitive
+    const ring = (parent: pc.Entity, m: pc.Material, radius: number, tube: number, x: number, y: number, z: number, rx = 0, ry = 0, rz = 0, sx = 1, sz = 1) => {
+      const e = new pc.Entity();
+      const mesh = pc.Mesh.fromGeometry(this.gfx, new pc.TorusGeometry({ tubeRadius: tube, ringRadius: radius, segments: 36, sides: 10 }));
+      e.addComponent('render', { meshInstances: [new pc.MeshInstance(mesh, m)] });
+      e.render!.castShadows = false;
+      e.setLocalScale(sx, 1, sz); e.setLocalPosition(x, y, z); e.setLocalEulerAngles(rx, ry, rz);
+      parent.addChild(e);
+      return e;
+    };
+    // head geometry (bind pose, relative to the Head bone, game frame: -Z forward): eyes y +0.05..+0.09 and z -0.15 at the
+    // cornea, brows top +0.11, skull half-width 0.075 at the brows, crown ~+0.27
+    const EYE_Y = 0.07, FACE_Z = -0.158;
     switch (style) {
       case 'cape': {
         bone = this.spine; offset.set(0, 0.2, 0.12);
@@ -159,21 +182,44 @@ export class Player {
         break;
       }
       case 'visor': {
-        bone = this.head; offset.set(0, 0.0, -0.11);
-        const m = emissive(color, 1.8, 0.75, false);
-        box(root, m, 0.24, 0.06, 0.08, 0, 0, 0);
-        box(root, mat(new pc.Color(0.1, 0.1, 0.12), true), 0.26, 0.025, 0.14, 0, 0.045, 0.03);
+        bone = this.head;
+        const glass = emissive(color, 1.6, 0.7, false), dark = mat(new pc.Color(0.1, 0.1, 0.12), true);
+        // one wrap-around lens: a front plate and two swept-back temple plates, under a thin dark rail with arms to the ears
+        box(root, glass, 0.17, 0.046, 0.012, 0, EYE_Y, FACE_Z);
+        for (const sx of [-1, 1]) {
+          box(root, glass, 0.075, 0.042, 0.012, sx * 0.108, EYE_Y, FACE_Z + 0.035, 0, sx * -42, 0);
+          box(root, dark, 0.012, 0.014, 0.13, sx * 0.082, EYE_Y + 0.03, FACE_Z + 0.1);
+        }
+        box(root, dark, 0.19, 0.014, 0.024, 0, EYE_Y + 0.03, FACE_Z + 0.004);
         break;
       }
       case 'goggles': {
-        bone = this.head; offset.set(0, 0.0, -0.1);
-        const m = mat(color, true), glass = emissive(new pc.Color(0.6, 0.9, 1), 0.8, 0.6, false);
-        for (const sx of [-1, 1]) { box(root, m, 0.09, 0.09, 0.05, sx * 0.055, 0, 0, 90, 0, 0, 'torus'); box(root, glass, 0.075, 0.075, 0.075, sx * 0.055, 0, 0, 0, 0, 0, 'sphere'); }
-        box(root, mat(new pc.Color(0.25, 0.15, 0.08)), 0.26, 0.03, 0.22, 0, 0, 0.08);
+        bone = this.head;
+        const brass = mat(color), glass = emissive(new pc.Color(0.55, 0.85, 1), 0.7, 0.55, false), leather = mat(new pc.Color(0.22, 0.13, 0.07));
+        (brass as pc.StandardMaterial).gloss = 0.7; brass.update();   // warm and glossy; full metalness read as black against the sky
+        for (const sx of [-1, 1]) {
+          ring(root, brass, 0.03, 0.0065, sx * 0.036, EYE_Y, FACE_Z, 90, 0, 0);   // stood up to face forward
+          box(root, glass, 0.058, 0.006, 0.058, sx * 0.036, EYE_Y, FACE_Z + 0.002, 90, 0, 0, 'cylinder');
+          box(root, brass, 0.012, 0.012, 0.04, sx * 0.068, EYE_Y, FACE_Z + 0.022, 0, sx * 30, 0);   // hinge rods back to the strap
+        }
+        box(root, brass, 0.016, 0.01, 0.01, 0, EYE_Y, FACE_Z);   // bridge
+        ring(root, leather, 0.1, 0.007, 0, EYE_Y + 0.01, -0.012, 0, 0, 0, 0.84, 1.14);   // strap around the skull
         break;
       }
     }
-    this.gear.set(slot, { root, bone, offset, style });
+    const attached = !!(bone && bone === this.head && this.headBind);
+    if (attached) {
+      // place the root in bone space using the bind pose, so it rides the head's animation exactly: a point authored
+      // in the game frame (-Z forward) sits at headBind + R180 * offset in model space (the model faces +Z there)
+      const { ibp, pos } = this.headBind!;
+      const pModel = new pc.Vec3(pos.x - offset.x, pos.y + offset.y, pos.z - offset.z);
+      const local = ibp.transformPoint(pModel, new pc.Vec3());
+      const rot = new pc.Quat().setFromMat4(ibp).mul(new pc.Quat().setFromEulerAngles(0, 180, 0));
+      root.reparent(bone!);
+      root.setLocalPosition(local);
+      root.setLocalRotation(rot);
+    }
+    this.gear.set(slot, { root, bone, offset, style, attached });
   }
 
   private currentHair(): string { return HAIRS.find((h) => h !== 'Hair_Beard' && !this.hiddenHair.has(h)) ?? ''; }
@@ -183,7 +229,7 @@ export class Player {
     const m = this.movement;
     this.capeT += dt;
     for (const g of this.gear.values()) {
-      if (!g.bone) continue;
+      if (!g.bone || g.attached) continue;
       const p = g.bone.getPosition();
       const r = this.visual.getRotation();
       const o = r.transformVector(g.offset, new pc.Vec3());

@@ -1,11 +1,12 @@
 {
   "name": "riftfall-skybreak",
   "private": true,
-  "version": "0.7.0",
+  "version": "0.8.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "build:crazygames": "tsc --noEmit && VITE_BASE=./ vite build --outDir dist-crazygames && rm -f riftfall-crazygames.zip && cd dist-crazygames && zip -qr ../riftfall-crazygames.zip . && cd .. && ls -la riftfall-crazygames.zip",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "assets:fetch": "tools/fetch-assets.sh all",

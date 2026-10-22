@@ -35,8 +35,11 @@ On a phone: put your thumb anywhere on the lower-left to run (a short push is a 
 
 ```bash
 npm install
-npm run dev        # http://localhost:5173
-npm run build      # production build in dist/
+npm run dev               # http://localhost:5173
+npm run build             # GitHub Pages build in dist/
+npm run build:crazygames  # relative-path build + riftfall-crazygames.zip for the CrazyGames portal
 ```
+
+The first run drops you straight into stage 1 with the controls shown as a hint; **H** opens the full card any time. On CrazyGames the game talks to the HTML5 SDK v3 (gameplay / loading events, data-module saves, midgame ads between stages, the site's mute switch); anywhere else those calls are no-ops. See [crazygames.md](crazygames.md) for the submission checklist.
 
 Built with [PlayCanvas](https://playcanvas.com/), TypeScript and Vite. Art: Quaternius (CC0), Kenney (CC0), Poly Haven HDRIs (CC0), Mixamo animations. Deployed to GitHub Pages on every push to `main`.

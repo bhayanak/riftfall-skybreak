@@ -267,7 +267,7 @@ export class Overlays {
 
   /** Controls card. Resolves on any pick (Space / click / tap). */
   howToPlay(touch: boolean, total = 20): Promise<number> {
-    this.show('RIFTFALL', 'HOW TO PLAY', touch ? 'TAP TO CONTINUE' : 'SPACE TO CONTINUE · ESC PAUSES · H SHOWS THIS CARD');
+    this.show('RIFTFALL', 'HOW TO PLAY', touch ? 'TAP TO CONTINUE' : 'SPACE TO CONTINUE · P PAUSES · H SHOWS THIS CARD');
     this.cards.innerHTML = '';
     const rows: [string, string, string][] = touch
       ? [['◉', 'MOVE', 'Thumb anywhere on the lower-left. A short push is a full sprint. Drag right side to look.'], ['JUMP', 'JUMP ×2', 'Hold for a full jump. Tap again in the air for a second jump.'],
@@ -281,7 +281,7 @@ export class Overlays {
          ['SHIFT', 'AIR DASH', 'Press mid-jump to cross big gaps.'], ['E', 'GRAPPLE', 'When a ring glows gold, press E to swing. E again to let go.'],
          ['SPACE', 'WALL-RUN', 'Jump towards a wall while moving. Space again to leap off.'], ['C', 'SLIDE', 'Duck under low gates and keep your speed. Works from a standstill at a gate.'],
          ['★', 'STARS', 'One hidden star per stage, off the obvious line. Missions pay coins for them.'],
-         ['▲', 'THE RIFT', `It chases you. ${total} stages to escape. From stage 5 it outruns a plain sprint — Market powers keep you ahead.`], ['ESC', 'PAUSE', 'Pause, controls, quit to title. M sound · R restart.']];
+         ['▲', 'THE RIFT', `It chases you. ${total} stages to escape. From stage 5 it outruns a plain sprint — Market powers keep you ahead.`], ['P', 'PAUSE', 'P or Esc: pause, controls, quit to title. M sound · R restart.']];
     const list = document.createElement('div');
     list.className = 'howto';
     for (const [key, name, text] of rows) {

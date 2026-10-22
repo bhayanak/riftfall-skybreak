@@ -7,6 +7,8 @@ Riftfall_Skybreak_Game_Plan.md
 # Node / Vite
 node_modules/
 dist/
+dist-crazygames/
+riftfall-crazygames.zip
 .vite/
 
 # OS / editor

@@ -110,6 +110,7 @@ export class Game {
   private helpOpen = false;
   private collapsing = false;
   private booted = false;
+  private adMuted = false;
 
   private constructor(app: pc.AppBase, canvas: HTMLCanvasElement, device: DeviceInfo) {
     this.app = app;
@@ -120,8 +121,13 @@ export class Game {
     const base = `${import.meta.env.BASE_URL}assets/`;
     this.assets = new Assets(app, base);
     this.sfx = new Sfx(base);
-    this.sfx.muted = this.music.muted = this.save.data.muted;
+    this.applyMute();
     this.sfx.onReady = (ctx, master) => this.music.attach(ctx, master);
+  }
+
+  /** Effective mute: the player's toggle, the site's mute switch (CrazyGames) and a playing video ad all silence us. */
+  private applyMute(): void {
+    this.sfx.muted = this.music.muted = this.save.data.muted || this.platform.muteAudio || this.adMuted;
   }
 
   static async create(canvas: HTMLCanvasElement): Promise<Game> {
@@ -156,10 +162,17 @@ export class Game {
 
   private async boot(): Promise<void> {
     this.overlays.loading(0);
+    const loading = this.assets.loadAll((d, t) => this.overlays.loading((d / t) * 0.8));
+    await this.platform.init();   // quick; the asset download is already under way
     this.platform.loadingStart();
-    await Promise.all([this.platform.init(), this.assets.loadAll((d, t) => this.overlays.loading((d / t) * 0.8))]);
+    await loading;
     this.save.attach(this.platform);
-    this.sfx.muted = this.music.muted = this.save.data.muted;
+    this.platform.onMuteChange = () => this.applyMute();
+    this.applyMute();
+    this.platform.reportProgress((this.save.data.bestStage / CAMPAIGN_STAGES) * 100);
+    // the site knows the device better than a user-agent sniff: phones and tablets always get the touch layout
+    const dt = this.platform.deviceType;
+    if (dt === 'mobile' || dt === 'tablet') { this.device.isTouch = true; this.device.isMobile = true; if (this.device.profile === 'desktop') this.device.profile = 'mobile-high'; }
 
     this.env = new Environment(this.app, this.assets, this.device);
     this.gen = new WorldGenerator(this.app, this.assets, this.world);
@@ -196,6 +209,7 @@ export class Game {
   private async menu(): Promise<void> {
     this.phase = 'menu';
     this.hud.setVisible(false);
+    this.platform.clearContext();
     for (;;) {
       const choice = await this.overlays.startScreen({ coins: this.save.data.coins, best: this.bestLine(), daily: this.daily, touch: this.device.isTouch, total: CAMPAIGN_STAGES, missions: this.missions.view() });
       this.sfx.play('ui_select', 0.5);
@@ -343,8 +357,14 @@ export class Game {
     this.overlays.hide();
     this.phase = 'playing';
     this.platform.gameplayStart();
-    if (!this.seenHowTo) { this.seenHowTo = true; void this.showHelp(); }
-    else if (this.stage === POWER_STAGE) this.hud.showHint(`${b.name} · THE RIFT NOW OUTRUNS A PLAIN SPRINT — DASH, SLIDE, WALL-RUN · POWERS IN THE MARKET SLOW IT`, 6);
+    this.platform.setContext({ stage: this.stage + 1, biome: b.id, endless: this.endless, daily: this.daily, seed: this.seed, coins: this.save.data.coins });
+    // first run lands straight in gameplay: the controls ride along as a long hint (the Rift waits until you move)
+    if (!this.seenHowTo) {
+      this.seenHowTo = true;
+      this.hud.showHint(this.device.isTouch
+        ? 'LEFT THUMB: RUN · RIGHT: LOOK · JUMP ×2 · DASH IN THE AIR · SLIDE UNDER GATES · GRAPPLE AT GOLD RINGS · ❚❚ CONTROLS'
+        : 'WASD RUN · MOUSE LOOK · SPACE JUMP ×2 · SHIFT AIR-DASH · C SLIDE · E GRAPPLE · P PAUSE · H CONTROLS', 14);
+    } else if (this.stage === POWER_STAGE) this.hud.showHint(`${b.name} · THE RIFT NOW OUTRUNS A PLAIN SPRINT — DASH, SLIDE, WALL-RUN · POWERS IN THE MARKET SLOW IT`, 6);
     else this.hud.showHint(this.stage === TITAN_STAGE ? `${b.name} · THE RIFT TITAN HAS FOUND YOU` : `${b.name} · THE RIFT IS BEHIND YOU — RUN`, 4);
   }
 
@@ -353,10 +373,12 @@ export class Game {
     if (this.helpOpen) return;
     this.helpOpen = true;
     const id = this.runId;
+    this.platform.gameplayStop();
     await this.overlays.howToPlay(this.device.isTouch, CAMPAIGN_STAGES);
     this.helpOpen = false;
     if (id !== this.runId) return;
     this.input.endFrame();
+    this.platform.gameplayStart();
     this.hud.showHint(`${this.biome().name} · THE RIFT IS BEHIND YOU — RUN`, 4);
   }
 
@@ -405,13 +427,12 @@ export class Game {
   /** The run is over (death or quit): bank, record, show the summary, then run again or go to the title. */
   private async endRun(reason: string, quit: boolean): Promise<void> {
     const id = this.runId;
-    this.phase = 'dead';
-    this.platform.gameplayStop();
+    this.phase = 'dead';   // gameplayStop was sent by onDeath / pause already
     this.bankStage();
     let record = '';
     if (!this.endless) {
       const beat = this.save.recordRun({ distance: this.distance, stages: this.stage, coins: this.runCoins, time: this.runTotalTime, won: false }, this.daily ? todayKey() : null);
-      if (beat.distance || beat.stages) this.platform.happytime();
+      if (beat.stages) this.platform.happytime();
       const newSuit = beat.unlocked.map((u) => byId(u)?.name).filter(Boolean)[0] ?? '';
       record = newSuit ? `NEW SUIT UNLOCKED — ${newSuit}` : beat.distance ? 'NEW DISTANCE RECORD' : beat.stages ? 'NEW STAGE RECORD' : beat.coins ? 'MOST COINS IN A RUN' : beat.dailyBest ? 'DAILY BEST' : '';
       if (newSuit) this.applyLook();
@@ -422,12 +443,19 @@ export class Game {
     const choice = await this.overlays.runOver({ title: quit ? 'RUN ENDED' : 'THE RIFT TOOK YOU', reason, distance: this.distance, stages: this.stage, total: CAMPAIGN_STAGES, coins: this.runCoins, time: this.runTotalTime, bestFlow: this.flow.best, bestLine, record });
     if (id !== this.runId) return;
     this.sfx.play('ui_confirm', 0.8);
-    if (choice === 0) await this.startRun(true);
+    if (choice === 0) { await this.adBreak(); if (id !== this.runId) return; await this.startRun(true); }
     else {
       await this.startRun(true, false);
       if (choice === 2) { this.phase = 'menu'; this.hud.setVisible(false); await this.overlays.shop(this.shopController(), this.device.isTouch); }
       await this.menu();
     }
+  }
+
+  /** Natural break between runs / stages: lets the platform show a midgame ad; audio is muted only while one plays. */
+  private async adBreak(): Promise<void> {
+    this.overlays.loading(1);
+    await this.platform.midgame(() => { this.adMuted = true; this.applyMute(); }, () => { this.adMuted = false; this.applyMute(); });
+    this.input.endFrame();
   }
 
   private async onPortal(): Promise<void> {
@@ -446,7 +474,7 @@ export class Game {
     const prev = this.save.data.stages[String(this.stage)];
     const stageCoins = this.bankStage();
     const rec = this.endless ? null : this.save.recordStage(this.stage, stageTime, stageCoins);
-    if (rec?.bestTime && !rec.first) this.platform.happytime();
+    if (!this.endless) this.platform.reportProgress(((this.stage + 1) / CAMPAIGN_STAGES) * 100);
     this.missions.set('stages', this.stage + 1);
     if (this.stageFalls === 0) this.missions.count('cleanstage');
     if (this.stage === 0 && stageTime < 40) this.missions.count('sky40');
@@ -464,8 +492,7 @@ export class Game {
     if (id !== this.runId) return;
     if (options[i]) this.deck.take(options[i], this.player.movement.stats);
     this.sfx.play('ui_confirm', 0.8);
-    if (this.stage + 1 === TITAN_STAGE) this.platform.happytime();
-    await this.platform.portalBreak(() => { this.sfx.muted = this.music.muted = true; }, () => { this.sfx.muted = this.music.muted = this.save.data.muted; });
+    await this.adBreak();
     if (id !== this.runId) return;
     this.stage++;
     this.distanceBase = this.distance;
@@ -481,6 +508,7 @@ export class Game {
     const beat = this.save.recordRun({ distance: this.distance, stages: CAMPAIGN_STAGES, coins: this.runCoins, time: this.runTotalTime, won: true }, this.daily ? todayKey() : null);
     this.recordedAt = { distance: this.distance, time: this.runTotalTime };
     this.platform.happytime();
+    this.platform.reportProgress(100);
     this.sfx.play('flow_up', 1, 1.2);
     this.camera.pulse(20);
     const bestLine = `${this.bestLine()} · ◎ ${this.save.data.coins.toLocaleString()} COINS`;
@@ -513,10 +541,10 @@ export class Game {
     input.beginFrame();
 
     if (input.wasPressed('mute')) {
-      const m = !this.sfx.muted;
-      this.sfx.muted = this.music.muted = m;
+      const m = !this.save.data.muted;
       this.save.setMuted(m);
-      this.hud.showHint(m ? 'SOUND OFF' : 'SOUND ON', 1.2);
+      this.applyMute();
+      this.hud.showHint(m ? 'SOUND OFF' : this.platform.muteAudio ? 'SOUND ON (MUTED BY THE SITE)' : 'SOUND ON', 1.2);
     }
     const playing = this.phase === 'playing' && !this.overlays.visible;
     this.music.update(dt, playing, this.flow ? this.flow.intensity01 : 0, this.rift && this.player ? pc.math.clamp(1 - this.rift.distanceTo(this.player.movement.position.z) / 30, 0, 1) : 0, this.stage);

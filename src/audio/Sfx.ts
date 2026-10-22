@@ -15,11 +15,14 @@ export class Sfx {
   constructor(private base: string) {
     const unlock = () => {
       if (!this.ctx) { this.init(); this.onReady?.(this.ctx!, this.master); }
-      this.ctx!.resume();
+      // iOS parks the context in 'interrupted' / 'suspended' after a call or app switch: only a gesture revives it
+      if (this.ctx!.state !== 'running') void this.ctx!.resume();
     };
     window.addEventListener('pointerdown', unlock, { passive: true });
     window.addEventListener('keydown', unlock);
     window.addEventListener('touchstart', unlock, { passive: true });
+    window.addEventListener('touchend', unlock, { passive: true });
+    window.addEventListener('click', unlock, { passive: true });
   }
 
   private init(): void {
