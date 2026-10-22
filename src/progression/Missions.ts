@@ -36,7 +36,14 @@ export const MISSIONS: Mission[] = [
   { id: 'm.escape', text: 'Escape the Rift', metric: 'escapes', target: 1, scope: 'run', reward: 200 },
   { id: 'm.stars8', text: 'Find 8 hidden stars', metric: 'stars', target: 8, scope: 'life', reward: 150 },
   { id: 'm.coins150run', text: 'Collect 150 coins in one run', metric: 'coins', target: 150, scope: 'run', reward: 80 },
-  { id: 'm.stages12', text: 'Clear all 12 stages in one run', metric: 'stages', target: 12, scope: 'run', reward: 250 },
+  { id: 'm.stages12', text: 'Clear 12 stages in one run', metric: 'stages', target: 12, scope: 'run', reward: 250 },
+  { id: 'm.stages9', text: 'Clear 9 stages in one run', metric: 'stages', target: 9, scope: 'run', reward: 150 },
+  { id: 'm.gates30', text: 'Slide under 30 gates in total', metric: 'gates', target: 30, scope: 'life', reward: 80 },
+  { id: 'm.coins400run', text: 'Collect 400 coins in one run', metric: 'coins', target: 400, scope: 'run', reward: 150 },
+  { id: 'm.stages16', text: 'Clear 16 stages in one run', metric: 'stages', target: 16, scope: 'run', reward: 300 },
+  { id: 'm.stars15', text: 'Find 15 hidden stars', metric: 'stars', target: 15, scope: 'life', reward: 250 },
+  { id: 'm.stages50', text: 'Clear 50 stages in total', metric: 'stages', target: 50, scope: 'life', reward: 200 },
+  { id: 'm.stages20', text: 'Clear all 20 stages in one run', metric: 'stages', target: 20, scope: 'run', reward: 500 },
 ];
 
 export interface MissionView { m: Mission; progress: number; done: boolean }

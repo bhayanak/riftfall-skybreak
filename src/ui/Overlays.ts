@@ -142,7 +142,10 @@ export class Overlays {
       rows += `<tr class="${cleared ? 'done' : locked ? 'locked' : ''}"><td>${cleared ? '✓' : i + 1}</td><td>${stageName(i)}${i === 3 ? ' · TITAN' : ''}</td><td>${cleared ? fmtTime(r.bestTime) : '—'}</td><td>${cleared ? '◎ ' + r.bestCoins.toLocaleString() : '—'}</td><td>${cleared ? r.clears : locked ? 'LOCKED' : '—'}</td><td>${r?.star ? '★' : '·'}</td></tr>`;
     }
     table.innerHTML = rows;
-    this.cards.appendChild(table);
+    const wrap = document.createElement('div');
+    wrap.className = 'table-wrap';
+    wrap.appendChild(table);
+    this.cards.appendChild(wrap);
     if (missions.length) this.cards.appendChild(missionPanel(missions));
     const back = document.createElement('button');
     back.className = 'card single minor';
@@ -263,7 +266,7 @@ export class Overlays {
   }
 
   /** Controls card. Resolves on any pick (Space / click / tap). */
-  howToPlay(touch: boolean): Promise<number> {
+  howToPlay(touch: boolean, total = 20): Promise<number> {
     this.show('RIFTFALL', 'HOW TO PLAY', touch ? 'TAP TO CONTINUE' : 'SPACE TO CONTINUE · ESC PAUSES · H SHOWS THIS CARD');
     this.cards.innerHTML = '';
     const rows: [string, string, string][] = touch
@@ -272,13 +275,13 @@ export class Overlays {
          ['DASH', 'AIR DASH', 'Tap mid-jump to cross big gaps.'], ['GRAPPLE', 'GRAPPLE', 'When a ring glows gold, tap to swing. Tap again to let go.'],
          ['WALL', 'WALL-RUN', 'Jump towards a wall while moving. Jump again to leap off.'], ['SLIDE', 'SLIDE', 'Duck under low gates and keep your speed.'],
          ['★', 'STARS', 'One hidden star per stage, off the obvious line.'],
-         ['▲', 'THE RIFT', 'It chases you. 12 stages to escape. Coins bank at every portal.'], ['❚❚', 'PAUSE', 'Top-right button: pause, controls, quit to title.']]
+         ['▲', 'THE RIFT', `It chases you. ${total} stages to escape. From stage 5 it outruns a plain sprint — Market powers keep you ahead.`], ['❚❚', 'PAUSE', 'Top-right button: pause, controls, quit to title.']]
       : [['WASD', 'MOVE', 'Mouse to look (click once to capture).'], ['SPACE', 'JUMP ×2', 'Hold for a full jump. Press again in the air for a second jump.'],
          ['LEDGE', 'GRAB', 'Land short? You grab the ledge and pull up. Glowing islands give way — keep moving.'],
          ['SHIFT', 'AIR DASH', 'Press mid-jump to cross big gaps.'], ['E', 'GRAPPLE', 'When a ring glows gold, press E to swing. E again to let go.'],
          ['SPACE', 'WALL-RUN', 'Jump towards a wall while moving. Space again to leap off.'], ['C', 'SLIDE', 'Duck under low gates and keep your speed. Works from a standstill at a gate.'],
          ['★', 'STARS', 'One hidden star per stage, off the obvious line. Missions pay coins for them.'],
-         ['▲', 'THE RIFT', 'It chases you. 12 stages to escape. Coins bank at every portal.'], ['ESC', 'PAUSE', 'Pause, controls, quit to title. M sound · R restart.']];
+         ['▲', 'THE RIFT', `It chases you. ${total} stages to escape. From stage 5 it outruns a plain sprint — Market powers keep you ahead.`], ['ESC', 'PAUSE', 'Pause, controls, quit to title. M sound · R restart.']];
     const list = document.createElement('div');
     list.className = 'howto';
     for (const [key, name, text] of rows) {
@@ -297,7 +300,7 @@ export class Overlays {
     return new Promise((res) => { this.resolver = res; });
   }
 
-  /** Run summary. Resolves 0 = run again, 1 = back to the title screen. */
+  /** Run summary. Resolves 0 = run again, 1 = title, 2 = market. */
   runOver(r: RunSummary): Promise<number> {
     this.show(r.record || r.title, r.reason, r.bestLine);
     this.cards.innerHTML = '';
@@ -311,13 +314,18 @@ export class Overlays {
     again.innerHTML = `<span class="icon">↻</span><span class="name">RUN AGAIN</span><span class="desc">SPACE / TAP</span>`;
     again.addEventListener('click', () => this.pick(1));
     this.cards.appendChild(again);
+    const market = document.createElement('button');
+    market.className = 'card single minor';
+    market.innerHTML = `<span class="icon">◈</span><span class="name">MARKET</span><span class="desc">Spend what you banked</span>`;
+    market.addEventListener('click', () => this.pick(2));
+    this.cards.appendChild(market);
     const menu = document.createElement('button');
     menu.className = 'card single minor';
-    menu.innerHTML = `<span class="icon">⌂</span><span class="name">TITLE</span><span class="desc">Wardrobe · Daily</span>`;
-    menu.addEventListener('click', () => this.pick(2));
+    menu.innerHTML = `<span class="icon">⌂</span><span class="name">TITLE</span><span class="desc">Stats · Daily</span>`;
+    menu.addEventListener('click', () => this.pick(3));
     this.cards.appendChild(menu);
-    this.primaryIndex = 1; this.escapeIndex = 2;
-    return new Promise<number>((res) => { this.resolver = res; }).then((i) => (i === 2 ? 1 : 0));
+    this.primaryIndex = 1; this.escapeIndex = 3;
+    return new Promise<number>((res) => { this.resolver = res; }).then((i) => (i === 3 ? 1 : i === 2 ? 2 : 0));
   }
 
   pick(i: number): void {

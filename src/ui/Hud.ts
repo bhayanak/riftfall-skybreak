@@ -63,6 +63,13 @@ export class Hud {
     if (d !== this.lastRift) { this.riftVal.textContent = `${d} m`; this.lastRift = d; this.rift.classList.toggle('close', d < 15); }
   }
 
+  private portalVal = document.getElementById('portal-val')!;
+  private lastPortal = -1;
+  setPortal(distance: number): void {
+    const d = Math.max(0, Math.round(distance / 5) * 5);
+    if (d !== this.lastPortal) { this.portalVal.textContent = `${d} m`; this.lastPortal = d; }
+  }
+
   setEnergy(v: number): void {
     if (v !== this.lastEnergy) { this.energy.textContent = String(v); this.lastEnergy = v; }
   }

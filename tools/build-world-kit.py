@@ -174,6 +174,16 @@ if WHAT & {"player", "all"}:
         if hair_arm:
             bpy.data.objects.remove(hair_arm, do_unlink=True)
         log(f"  hair {stem}: {k} mesh(es)")
+    # some hairstyles were authored for a slightly smaller skull: push them out along their normals so the
+    # head does not show through the top
+    INFLATE = {"Hair_Long": 0.032, "Hair_Buns": 0.012, "Hair_BuzzedFemale": 0.008}
+    for o in bpy.data.objects:
+        if o.type == "MESH" and o.name in INFLATE:
+            me = o.data
+            normals = [v.normal.copy() for v in me.vertices]
+            for v, n in zip(me.vertices, normals): v.co += n * INFLATE[o.name]
+            me.update()
+            log(f"  inflated {o.name} by {INFLATE[o.name]}")
     fix_images(UBC)
     resize_images(1024)
     for o in bpy.data.objects:

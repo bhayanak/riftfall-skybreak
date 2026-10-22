@@ -233,6 +233,9 @@ export class WorldGenerator {
     const spin = this.t * 120;
     for (const g of this.gems) {
       if (g.taken) continue;
+      const near = Math.abs(g.pos.z - playerPos.z) < 160;
+      if (g.entity.enabled !== near) g.entity.enabled = near;
+      if (!near) continue;
       g.entity.setEulerAngles(0, spin + g.pos.x * 40, 0);
       g.entity.setPosition(g.pos.x, g.pos.y + Math.sin(this.t * 2.5 + g.pos.z) * 0.12, g.pos.z);
     }

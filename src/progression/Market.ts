@@ -86,18 +86,20 @@ export const MARKET: MarketItem[] = [
   { id: 'trail.white', kind: 'trail', name: 'STARLIGHT', desc: 'Pure white sparks.', price: 180, trail: c(1.0, 1.0, 1.0) },
   { id: 'trail.violet', kind: 'trail', name: 'VIOLET', desc: 'Deep purple embers.', price: 180, trail: c(0.7, 0.3, 1.0) },
   { id: 'trail.rainbow', kind: 'trail', name: 'PRISM', desc: 'Cycles through every colour.', price: 400, trail: 'rainbow' },
-  // ---- powers (permanent, levelled) ----------------------------------------------------------------------------
-  { id: 'power.quickfeet', kind: 'power', name: 'QUICK FEET', desc: '+3% run speed per level.', price: 150, levelPrices: [300, 500], icon: '⇶', apply: (s, l) => { s.speedMult *= 1 + 0.03 * l; } },
-  { id: 'power.longarms', kind: 'power', name: 'LONG ARMS', desc: 'Grapple rings catch from 3 m further per level.', price: 120, levelPrices: [260], icon: '⚓', apply: (s, l) => { s.grappleRange += 3 * l; } },
+  // ---- powers (permanent, levelled). From stage 5 the Rift outruns a plain sprint: these are how you keep up. ----
+  { id: 'power.quickfeet', kind: 'power', name: 'QUICK FEET', desc: '+3% run speed per level. Five levels.', price: 150, levelPrices: [300, 500, 800, 1200], icon: '⇶', apply: (s, l) => { s.speedMult *= 1 + 0.03 * l; } },
+  { id: 'power.ward', kind: 'power', name: 'RIFT WARD', desc: 'The Rift chases 6% slower per level. Five levels.', price: 250, levelPrices: [450, 700, 1000, 1500], icon: '⌛', apply: (s, l) => { s.riftSlow *= Math.pow(0.94, l); } },
+  { id: 'power.afterburner', kind: 'power', name: 'AFTERBURNER', desc: 'Dash 8% faster and further per level.', price: 200, levelPrices: [400, 700], icon: '⟫', apply: (s, l) => { s.dashMult *= 1 + 0.08 * l; } },
+  { id: 'power.anchor', kind: 'power', name: 'RIFT ANCHOR', desc: 'After a fall the Rift is held 4 m further back and 0.5 s longer, per level.', price: 180, levelPrices: [360, 600], icon: '⚑', apply: (s, l) => { s.fallGrace += l; } },
+  { id: 'power.longarms', kind: 'power', name: 'LONG ARMS', desc: 'Grapple rings catch from 3 m further per level.', price: 120, levelPrices: [260, 450], icon: '⚓', apply: (s, l) => { s.grappleRange += 3 * l; } },
   { id: 'power.magnet', kind: 'power', name: 'MAGNET CORE', desc: 'Coins fly to you from 0.8 m further per level.', price: 100, levelPrices: [200, 350], icon: '◎', apply: (s, l) => { s.magnetRadius += 0.8 * l; } },
-  { id: 'power.feather', kind: 'power', name: 'FEATHERFALL', desc: 'Jump 4% higher and leave edges later, per level.', price: 200, levelPrices: [400], icon: '✧', apply: (s, l) => { s.jumpMult *= 1 + 0.04 * l; s.coyoteBonus += 0.05 * l; } },
-  { id: 'power.ward', kind: 'power', name: 'RIFT WARD', desc: 'The Rift chases 6% slower per level.', price: 250, levelPrices: [450, 700], icon: '⌛', apply: (s, l) => { s.riftSlow *= Math.pow(0.94, l); } },
-  { id: 'power.wallgrip', kind: 'power', name: 'WALL GRIP', desc: 'Wall-run 0.4 s longer per level.', price: 150, levelPrices: [300], icon: '▐', apply: (s, l) => { s.wallRunTime += 0.4 * l; } },
-  { id: 'power.flowkeep', kind: 'power', name: 'FLOW KEEPER', desc: 'FLOW drains 15% slower per level.', price: 180, levelPrices: [360], icon: '∞', apply: (s, l) => { s.flowDecayMult *= 1 + 0.15 * l; } },
+  { id: 'power.feather', kind: 'power', name: 'FEATHERFALL', desc: 'Jump 4% higher and leave edges later, per level.', price: 200, levelPrices: [400, 650], icon: '✧', apply: (s, l) => { s.jumpMult *= 1 + 0.04 * l; s.coyoteBonus += 0.05 * l; } },
+  { id: 'power.wallgrip', kind: 'power', name: 'WALL GRIP', desc: 'Wall-run 0.4 s longer per level.', price: 150, levelPrices: [300, 500], icon: '▐', apply: (s, l) => { s.wallRunTime += 0.4 * l; } },
+  { id: 'power.flowkeep', kind: 'power', name: 'FLOW KEEPER', desc: 'FLOW drains 15% slower per level.', price: 180, levelPrices: [360, 600], icon: '∞', apply: (s, l) => { s.flowDecayMult *= 1 + 0.15 * l; } },
   { id: 'power.softland', kind: 'power', name: 'SOFT LANDING', desc: 'Falling costs 2 fewer coins per level.', price: 120, levelPrices: [240], icon: '⤓', apply: (s, l) => { s.fallPenalty = Math.max(1, s.fallPenalty - 2 * l); } },
   { id: 'power.lucky', kind: 'power', name: 'LUCKY COIN', desc: '10% chance per level that a coin counts double.', price: 200, levelPrices: [400, 650], icon: '✦', apply: (s, l) => { s.luck += 0.1 * l; } },
-  { id: 'power.twincore', kind: 'power', name: 'TWIN CORE', desc: 'Start every run with two dashes.', price: 800, icon: '»»', apply: (s) => { s.dashCharges += 1; } },
-  { id: 'power.secondwind', kind: 'power', name: 'SECOND WIND', desc: 'Start every run with a Rift Shield.', price: 600, icon: '⬡', apply: (s) => { s.riftShield += 1; } },
+  { id: 'power.twincore', kind: 'power', name: 'TWIN CORE', desc: 'Start every run with two dashes.', price: 900, icon: '»»', apply: (s) => { s.dashCharges += 1; } },
+  { id: 'power.secondwind', kind: 'power', name: 'SECOND WIND', desc: 'Start every run with a Rift Shield per level.', price: 700, levelPrices: [1200], icon: '⬡', apply: (s, l) => { s.riftShield += l; } },
 ];
 
 export const byId = (id: string): MarketItem | undefined => MARKET.find((i) => i.id === id);

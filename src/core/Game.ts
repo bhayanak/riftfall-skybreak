@@ -28,10 +28,16 @@ type Phase = 'loading' | 'menu' | 'playing' | 'portal' | 'upgrade' | 'dead';
 const BIOME_ORDER: BiomeId[] = ['sky', 'fire', 'void'];
 /** Stage at which the Rift Titan starts stalking the route. */
 const TITAN_STAGE = 3;
-/** A run is an escape across this many stages (4 loops of the 3 biomes); after that the player may keep running. */
-const CAMPAIGN_STAGES = 12;
+/** From this stage (0-based; shown as stage 5) the Rift's floor speed exceeds a plain sprint: powers + boosts required. */
+const POWER_STAGE = 4;
+/** A run is an escape across this many stages; after that the player may keep running. */
+const CAMPAIGN_STAGES = 20;
 const ESCAPE_BONUS = 150;
 const STAR_COINS = 10;
+/** Chunks per stage: a first stage is a minute, the last one four. */
+const chunksFor = (stage: number): number => Math.min(60, 16 + stage * 2);
+/** Rift floor speed (m/s) before powers. Plain sprint is 9.5. */
+const riftFloor = (stage: number): number => stage < POWER_STAGE ? 4.0 + stage * 1.0 : 9.8 + (stage - POWER_STAGE) * 0.35;
 
 /** Same route for everyone on a given UTC day. */
 function dailySeed(): number {
@@ -203,7 +209,7 @@ export class Game {
       } else if (choice === 'stats') {
         await this.overlays.stats(this.save.data, CAMPAIGN_STAGES, (i) => this.stageName(i), this.missions.view(), this.missions.completedCount);
       } else {
-        await this.overlays.howToPlay(this.device.isTouch);
+        await this.overlays.howToPlay(this.device.isTouch, CAMPAIGN_STAGES);
         this.seenHowTo = true;
       }
     }
@@ -300,7 +306,7 @@ export class Game {
     await this.env.setBiome(b.id);
     if (id !== this.runId) return;
     const difficulty = 0.6 + this.stage * 0.45;
-    this.gen.generate(this.seed + this.stage * 7919, b, difficulty, 11 + Math.min(7, this.stage), this.stage);
+    this.gen.generate(this.seed + this.stage * 7919, b, difficulty, chunksFor(this.stage), this.stage);
     if (import.meta.env.DEV) {
       const bad = this.gen.violations();
       if (bad.length) console.warn('[route] edges harder than intended:', bad);
@@ -338,6 +344,7 @@ export class Game {
     this.phase = 'playing';
     this.platform.gameplayStart();
     if (!this.seenHowTo) { this.seenHowTo = true; void this.showHelp(); }
+    else if (this.stage === POWER_STAGE) this.hud.showHint(`${b.name} · THE RIFT NOW OUTRUNS A PLAIN SPRINT — DASH, SLIDE, WALL-RUN · POWERS IN THE MARKET SLOW IT`, 6);
     else this.hud.showHint(this.stage === TITAN_STAGE ? `${b.name} · THE RIFT TITAN HAS FOUND YOU` : `${b.name} · THE RIFT IS BEHIND YOU — RUN`, 4);
   }
 
@@ -346,7 +353,7 @@ export class Game {
     if (this.helpOpen) return;
     this.helpOpen = true;
     const id = this.runId;
-    await this.overlays.howToPlay(this.device.isTouch);
+    await this.overlays.howToPlay(this.device.isTouch, CAMPAIGN_STAGES);
     this.helpOpen = false;
     if (id !== this.runId) return;
     this.input.endFrame();
@@ -357,10 +364,11 @@ export class Game {
     const cp = this.gen.checkpoints[this.checkpoint] ?? this.gen.checkpoints[0];
     this.player.movement.respawn(cp.spawn);
     this.camera.snapTo(cp.spawn, this.camera.yaw);
-    // push the Rift back behind the checkpoint and bring back anything it already swallowed there
-    this.rift.reset(Math.max(this.rift.z, cp.spawn.z + 32), this.rift.speed);
+    // push the Rift back to a short lead behind the checkpoint (Rift Anchor widens it) and bring back anything it swallowed there
+    const S = this.player.movement.stats;
+    this.rift.reset(Math.max(this.rift.z, cp.spawn.z + 14 + S.fallGrace * 4), this.rift.speed);
     this.gen.restoreAhead(this.rift.z);
-    this.riftGrace = 1.5;
+    this.riftGrace = 1.5 + S.fallGrace * 0.5;
     this.energy = Math.max(0, this.energy - this.player.movement.stats.fallPenalty);
     this.stageFalls++;
     this.flow.reset();
@@ -377,7 +385,7 @@ export class Game {
     for (;;) {
       const c = await this.overlays.pauseMenu({ stage: this.stage, total: CAMPAIGN_STAGES, endless: this.endless, coins: this.runCoins + this.energy, touch: this.device.isTouch });
       if (id !== this.runId) return;
-      if (c === 'howto') { await this.overlays.howToPlay(this.device.isTouch); if (id !== this.runId) return; continue; }
+      if (c === 'howto') { await this.overlays.howToPlay(this.device.isTouch, CAMPAIGN_STAGES); if (id !== this.runId) return; continue; }
       if (c === 'quit') { await this.endRun('COINS BANKED · BACK TO THE TITLE', true); return; }
       break;
     }
@@ -415,7 +423,11 @@ export class Game {
     if (id !== this.runId) return;
     this.sfx.play('ui_confirm', 0.8);
     if (choice === 0) await this.startRun(true);
-    else { await this.startRun(true, false); await this.menu(); }
+    else {
+      await this.startRun(true, false);
+      if (choice === 2) { this.phase = 'menu'; this.hud.setVisible(false); await this.overlays.shop(this.shopController(), this.device.isTouch); }
+      await this.menu();
+    }
   }
 
   private async onPortal(): Promise<void> {
@@ -439,7 +451,7 @@ export class Game {
     if (this.stageFalls === 0) this.missions.count('cleanstage');
     if (this.stage === 0 && stageTime < 40) this.missions.count('sky40');
     if (!this.endless && this.stage + 1 >= CAMPAIGN_STAGES) { await this.onVictory(id); return; }
-    await this.nextStage(id, { stage: this.stage, total: CAMPAIGN_STAGES, endless: this.endless, time: stageTime, coins: stageCoins, rec, prevBestTime: prev?.bestTime ?? 0, prevBestCoins: prev?.bestCoins ?? 0, next: this.stageName(this.stage + 1), wallet: this.save.data.coins });
+    await this.nextStage(id, { stage: this.stage, total: CAMPAIGN_STAGES, endless: this.endless, time: stageTime, coins: stageCoins, rec, prevBestTime: prev?.bestTime ?? 0, prevBestCoins: prev?.bestCoins ?? 0, next: this.stageName(this.stage + 1) + (this.stage + 1 === POWER_STAGE ? ' · THE RIFT SPEEDS UP' : ''), wallet: this.save.data.coins });
   }
 
   /** Stage-clear card with the upgrade pick, then build the next stage. */
@@ -577,12 +589,12 @@ export class Game {
       this.camera.kick(1);
       this.camera.pulse(14);
     }
-    // rift pressure: starts 3 s after the first move, ramps with stage and time; paused briefly after a fall.
-    // Late stages run faster than you can sprint: dash, slide and wall-run boosts are how you keep ahead.
-    const base = 3.8 + this.stage * 0.5;
-    let riftSpeed = (!this.started || this.runTime < 3 || this.riftGrace > 0 ? 0 : Math.min(Math.min(base + 2.5, 11), base + this.runTime * 0.06)) * m.stats.riftSlow;
-    // during the collapse the Rift runs just faster than you can: stopping is fatal, moving forward is not
-    if (this.collapsing && riftSpeed > 0) riftSpeed = Math.max(riftSpeed, 10.5 * m.stats.riftSlow);
+    // rift pressure: starts 3 s after the first move, ramps a little with time; paused briefly after a fall.
+    // From POWER_STAGE the floor is above a plain sprint: dash, slide and wall-run boosts plus Market powers keep you ahead.
+    const floor = riftFloor(this.stage);
+    let riftSpeed = (!this.started || this.runTime < 3 || this.riftGrace > 0 ? 0 : Math.min(floor + 1.5, floor + this.runTime * 0.03)) * m.stats.riftSlow;
+    // during the collapse the Rift surges: stopping is fatal, moving forward is not
+    if (this.collapsing && riftSpeed > 0) riftSpeed = Math.max(riftSpeed * 1.3, 10.5 * m.stats.riftSlow);
     this.rift.speed = riftSpeed;
     this.rift.update(dt, m.position.z, m.position.y);
     this.gen.riftSweep(this.rift.z);
@@ -596,7 +608,10 @@ export class Game {
         this.sfx.play('flow_up', 1, 0.6);
         this.camera.kick(1);
       } else {
-        void this.onDeath('CONSUMED BY THE RIFT');
+        const sprint = 9.5 * m.stats.speedMult;
+        let why = `IT RAN ${riftSpeed.toFixed(1)} m/s · YOU SPRINT ${sprint.toFixed(1)} m/s`;
+        if (this.stage >= POWER_STAGE && this.save.level('power.quickfeet') + this.save.level('power.ward') < 4) why += ' · RIFT WARD AND QUICK FEET ARE IN THE MARKET';
+        void this.onDeath(why);
         input.endFrame();
         return;
       }
@@ -685,6 +700,8 @@ export class Game {
     this.hud.setFlow(this.flow.multiplier, this.flow.progress01);
     this.hud.setEnergy(this.runCoins + Math.round(this.energy));
     this.hud.setTimer(this.runTime);
+    this.hud.setPortal(m.position.z - this.gen.portalPos.z);
+    this.gen.builder.cull(m.position.z);
     this.hud.update(dt);
 
     this.fpsAcc += dt; this.fpsFrames++;

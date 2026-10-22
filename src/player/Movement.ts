@@ -69,11 +69,15 @@ export interface RunStats {
   fallPenalty: number;
   /** chance a picked-up coin counts double */
   luck: number;
+  /** multiplier on dash speed (and therefore distance) */
+  dashMult: number;
+  /** levels of Rift Anchor: extra pushback / grace after a fall */
+  fallGrace: number;
 }
 export const defaultStats = (): RunStats => ({
   airJumps: 1, dashCharges: 1, grappleRange: TUNING.grappleRange, speedMult: 1, wallRunTime: TUNING.wallRunTime,
   coyoteBonus: 0, jumpMult: 1, grappleBoost: 1, dashResetOnTrick: false, magnetRadius: 1.8, flowDecayMult: 1, riftShield: 0,
-  riftSlow: 1, fallPenalty: 5, luck: 0,
+  riftSlow: 1, fallPenalty: 5, luck: 0, dashMult: 1, fallGrace: 0,
 });
 
 export type MoveEvent =
@@ -227,8 +231,8 @@ export class Movement {
           const cs = Math.cos(ang), sn = Math.sin(ang);
           this.dashDir.set(this.dashDir.x * cs - this.dashDir.z * sn, 0, this.dashDir.x * sn + this.dashDir.z * cs).normalize();
         }
-        this.velocity.x = this.dashDir.x * T.dashSpeed;
-        this.velocity.z = this.dashDir.z * T.dashSpeed;
+        this.velocity.x = this.dashDir.x * T.dashSpeed * S.dashMult;
+        this.velocity.z = this.dashDir.z * T.dashSpeed * S.dashMult;
         this.velocity.y = Math.max(0, this.velocity.y - T.gravity * 0.25 * dt);
         this.dashTimer -= dt;
         if (this.dashTimer <= 0) {

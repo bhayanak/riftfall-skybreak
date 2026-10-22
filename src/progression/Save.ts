@@ -216,7 +216,7 @@ function fromV1(o: Record<string, unknown>): SaveData {
   const d = DEFAULTS();
   const n = (k: string) => (typeof o[k] === 'number' ? (o[k] as number) : 0);
   const owned = Array.isArray(o.owned) ? (o.owned as string[]) : [];
-  d.bestDistance = n('bestDistance'); d.bestStage = Math.min(n('bestStage'), 12); d.runs = n('runs'); d.wins = n('wins'); d.bestRunTime = n('bestRunTime');
+  d.bestDistance = n('bestDistance'); d.bestStage = n('bestStage'); d.runs = n('runs'); d.wins = n('wins'); d.bestRunTime = n('bestRunTime');
   d.totalDistance = n('totalDistance'); d.totalTime = n('totalTime');
   d.coins = Math.round(n('coins') * V1_SCALE); d.bestEnergy = Math.round(n('bestEnergy') * V1_SCALE); d.totalCoins = Math.round(n('totalCoins') * V1_SCALE);
   for (const [k, r] of Object.entries((o.stages as Record<string, StageRecord>) ?? {})) d.stages[k] = { bestTime: r.bestTime, bestCoins: Math.round(r.bestCoins * V1_SCALE), clears: r.clears };

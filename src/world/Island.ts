@@ -94,6 +94,8 @@ export class IslandBuilder {
   readonly drifting: { e: pc.Entity; vx: number; spin: number }[] = [];
   /** Hanging waterfalls (sheet + splash ring) that shimmer. */
   private falls: pc.Entity[] = [];
+  /** Everything on the route with its z, so stretches far from the player can be switched off (long stages). */
+  private route: { e: pc.Entity; z: number; isl?: Island }[] = [];
 
   constructor(app: pc.AppBase, private assets: Assets, private world: CollisionWorld, public rng: Rng) {
     app.root.addChild(this.root);
@@ -132,7 +134,17 @@ export class IslandBuilder {
     this.islands.length = 0;
     this.drifting.length = 0;
     this.falls.length = 0;
+    this.route.length = 0;
     this.world.clear();
+  }
+
+  /** Render only the stretch around the player; colliders stay live. Sinking islands are left to update(). */
+  cull(playerZ: number): void {
+    for (const r of this.route) {
+      if (r.isl && r.isl.falling > 0) continue;
+      const on = r.z > playerZ - 170 && r.z < playerZ + 45;
+      if (r.e.enabled !== on) r.e.enabled = on;
+    }
   }
 
   island(s: IslandSpec): Island {
@@ -182,6 +194,7 @@ export class IslandBuilder {
     }
 
     const isl: Island = { root, colliders, occluders, x: s.x, z: s.z, top: s.top, w: s.w, d: s.d, falling: 0 };
+    this.route.push({ e: root, z: s.z, isl });
     // decoration
     const density = (s.decor ?? 0.5) * this.quality;
     if (density > 0) this.decorate(root, s, density, isl);
@@ -199,6 +212,7 @@ export class IslandBuilder {
     e.setLocalScale(1, h, len);
     e.setPosition(x, yBottom + h * 0.5, z);
     this.root.addChild(e);
+    this.route.push({ e, z });
     // crown
     const pieces = Math.max(1, Math.floor(len / 4));
     for (let i = 0; i < pieces; i++) {
@@ -206,6 +220,7 @@ export class IslandBuilder {
       p.setPosition(x, yBottom + h, z - len / 2 + (i + 0.5) * (len / pieces));
       p.setEulerAngles(0, side === 'l' ? 90 : -90, 0);
       this.root.addChild(p);
+      this.route.push({ e: p, z });
     }
     const c = new BoxCollider(new pc.Vec3(x, yBottom + h * 0.5, z), new pc.Vec3(1, h, len), undefined, 'wall');
     return this.world.add(c);
@@ -219,6 +234,7 @@ export class IslandBuilder {
     const root = new pc.Entity('gate');
     root.setPosition(x, top, z);
     this.root.addChild(root);
+    this.route.push({ e: root, z });
     const h = 1.8, clear = 1.1;
     const wall = this.assets.spawn('ruin_wall_broken');
     wall.setLocalScale(width / 1.99, h / 1.95, 1.6);
@@ -285,6 +301,7 @@ export class IslandBuilder {
     const col = this.world.add(new BoxCollider(new pc.Vec3(x, top - 0.25, z), new pc.Vec3(width, 0.5, len)));
     const isl: Island = { root, colliders: [col], occluders: [], x, z, top, w: width, d: len, falling: 0 };
     this.islands.push(isl);
+    this.route.push({ e: root, z, isl });
     return isl;
   }
 
