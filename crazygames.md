@@ -10,7 +10,7 @@ npm run build:crazygames      # → riftfall-crazygames.zip (relative paths, bas
 ```
 
 - Upload `riftfall-crazygames.zip` in the Developer Portal → your game → *Files*. `index.html` is at the zip root. Everything is referenced relatively — the normal `npm run build` is for GitHub Pages and uses an absolute `/riftfall-skybreak/` base, which **does not work** on CrazyGames.
-- Weight (v0.8.0): ≈ 13.5 MB total — PlayCanvas + game JS ≈ 1.5 MB, assets ≈ 12 MB (skies 4.7 MB, player 2.2 MB, world kit 3.4 MB, sfx 0.4 MB), 60-odd files. Everything loads before the first `gameplayStart`, so the *initial download size* CrazyGames measures is the same ≈ 13.5 MB: under the 50 MB limit and under the 20 MB bar for the **mobile homepage**. Keep it that way: don't add big textures or music files without lazy-loading them.
+- Weight (v0.8.0): the zip is ≈ 8.3 MB compressed / 14.5 MB unpacked, 82 files — PlayCanvas + game JS ≈ 1.5 MB, assets ≈ 12 MB (skies 4.7 MB, player 2.2 MB, world kit 3.4 MB, sfx 0.4 MB). Everything loads before the first `gameplayStart`, so the *initial download size* CrazyGames measures is the same ≈ 14.5 MB: under the 50 MB limit and under the 20 MB bar for the **mobile homepage**. Keep it that way: don't add big textures or music files without lazy-loading them.
 - No sitelock is built in, so nothing needs whitelisting.
 
 ## 2. Developer Portal settings
